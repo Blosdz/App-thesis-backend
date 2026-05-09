@@ -1,5 +1,5 @@
-import { Injectable } from '@nestjs/common';
-import { CurrentUser } from '../common/interfaces/current-user.interface';
+import { ForbiddenException, Injectable } from '@nestjs/common';
+import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { DatabaseService } from '../database/database.service';
 import { CrearObservacionDto } from './dto/crear-observacion.dto';
 
@@ -8,31 +8,42 @@ export class ObservacionesService {
   constructor(private readonly databaseService: DatabaseService) {}
 
   async crear(user: CurrentUser, dto: CrearObservacionDto) {
-    const result = await this.databaseService.queryWithUser(
-      user.auth_usuario_id,
-      'SELECT * FROM "AT".crear_observacion_tesis_enriquecida($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+    if (user.rol !== 'asesor' && user.rol !== 'admin') {
+      throw new ForbiddenException(
+        'Esta operación requiere rol asesor o admin',
+      );
+    }
+    const result = await this.databaseService.query(
+      `INSERT INTO "AT".observaciones_tesis
+         (tesis_id, documento_tesis_id, asesor_id, texto, titulo, contenido_html, contenido_delta)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
       [
         dto.tesisId,
         dto.documentoTesisId ?? null,
-        dto.reunionId ?? null,
-        dto.validationCitaId ?? null,
+        user.usuario_id,
+        dto.texto,
         dto.titulo ?? null,
-        dto.texto ?? null,
         dto.contenidoHtml ?? null,
         dto.contenidoDelta ?? null,
-        dto.tipoOrigen ?? 'manual',
       ],
     );
-
-    return { ok: true, data: result.rows[0] };
+    return {
+      ok: true,
+      message: 'Observación registrada correctamente',
+      data: result.rows[0],
+    };
   }
 
   async historial(tesisId: string) {
     const result = await this.databaseService.query(
-      'SELECT * FROM "AT".listar_historial_observaciones_tesis($1)',
+      `SELECT o.*, ppa.nombre_mostrar AS asesor_nombre
+       FROM "AT".observaciones_tesis o
+       LEFT JOIN "AT".perfil_publico_asesor ppa ON ppa.asesor_id = o.asesor_id
+       WHERE o.tesis_id = $1
+       ORDER BY o.creado_en DESC`,
       [tesisId],
     );
-
     return { ok: true, data: result.rows };
   }
 }

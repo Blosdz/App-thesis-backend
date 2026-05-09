@@ -9,31 +9,19 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { CurrentUserDecorator } from '../common/decorators/current-user.decorator';
-import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
-import { AprobarPagoReservaDto } from './dto/aprobar-pago-reserva.dto';
+import { ActualizarEstadoReunionDto } from './dto/actualizar-estado-reunion.dto';
 import { CancelarReunionDto } from './dto/cancelar-reunion.dto';
 import { CrearReunionDto } from './dto/crear-reunion.dto';
-import { HistorialValidacionesDto } from './dto/historial-validaciones.dto';
-import { ListarReunionesDto } from './dto/listar-reuniones.dto';
+import { GuardarGoogleMeetDto } from './dto/guardar-google-meet.dto';
 import { ResponderReservaDto } from './dto/responder-reserva.dto';
-import { ValidarCitaAdminDto } from './dto/validar-cita-admin.dto';
 import { ReunionesService } from './reuniones.service';
 
-@Controller('reuniones')
 @UseGuards(JwtAuthGuard)
+@Controller('reuniones')
 export class ReunionesController {
   constructor(private readonly reunionesService: ReunionesService) {}
-
-  @Get()
-  listar(
-    @CurrentUserDecorator() user: CurrentUser,
-    @Query() query: ListarReunionesDto,
-  ) {
-    return this.reunionesService.listar(user, query);
-  }
 
   @Post()
   crear(
@@ -43,68 +31,112 @@ export class ReunionesController {
     return this.reunionesService.crear(user, dto);
   }
 
-  @Patch(':id/cancelar')
+  @Post('asesoria')
+  crearAsesoria(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Body() dto: CrearReunionDto,
+  ) {
+    return this.reunionesService.crearSolicitud(user, {
+      ...dto,
+      tipoReunion: 'asesoria',
+    });
+  }
+
+  @Post('presustentacion')
+  crearPresustentacion(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Body() dto: CrearReunionDto,
+  ) {
+    return this.reunionesService.crearSolicitud(user, {
+      ...dto,
+      tipoReunion: 'presustentacion',
+    });
+  }
+
+  @Get('mis-citas-estudiante')
+  misCitasEstudiante(@CurrentUserDecorator() user: CurrentUser) {
+    return this.reunionesService.misCitasEstudiante(user);
+  }
+
+  @Get('mis-citas-asesor')
+  misCitasAsesor(@CurrentUserDecorator() user: CurrentUser) {
+    return this.reunionesService.misCitasAsesor(user);
+  }
+
+  @Get('validaciones/estudiante')
+  historialValidacionesEstudiante(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Query('status') status?: string,
+  ) {
+    return this.reunionesService.historialValidacionesEstudiante(user, status);
+  }
+
+  @Get('validaciones/asesor')
+  historialValidacionesAsesor(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Query('status') status?: string,
+  ) {
+    return this.reunionesService.historialValidacionesAsesor(user, status);
+  }
+
+  @Get(':reunionId')
+  detalle(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('reunionId') reunionId: string,
+  ) {
+    return this.reunionesService.detalle(user, reunionId);
+  }
+
+  @Post(':reunionId/cancelar')
   cancelar(
     @CurrentUserDecorator() user: CurrentUser,
-    @Param('id') reunionId: string,
+    @Param('reunionId') reunionId: string,
     @Body() dto: CancelarReunionDto,
   ) {
     return this.reunionesService.cancelar(user, reunionId, dto);
   }
 
-  @Get('validaciones/estudiante')
-  historialEstudiante(
+  @Patch(':reunionId/estado')
+  actualizarEstado(
     @CurrentUserDecorator() user: CurrentUser,
-    @Query() query: HistorialValidacionesDto,
+    @Param('reunionId') reunionId: string,
+    @Body() dto: ActualizarEstadoReunionDto,
   ) {
-    return this.reunionesService.historialEstudiante(user, query);
+    return this.reunionesService.actualizarEstado(user, reunionId, dto);
   }
 
-  @Get('validaciones/asesor')
-  historialAsesor(
-    @CurrentUserDecorator() user: CurrentUser,
-    @Query() query: HistorialValidacionesDto,
-  ) {
-    return this.reunionesService.historialAsesor(user, query);
-  }
-
-  @Post('validaciones/:id/responder')
+  @Post('validaciones/:validationCitaId/responder')
   responderReserva(
     @CurrentUserDecorator() user: CurrentUser,
-    @Param('id') validationCitaId: string,
+    @Param('validationCitaId') validationCitaId: string,
     @Body() dto: ResponderReservaDto,
   ) {
     return this.reunionesService.responderReserva(user, validationCitaId, dto);
   }
 
-  @Post('validaciones/:id/aprobar-pago')
+  @Post('validaciones/:validationCitaId/aprobar-pago')
   aprobarPagoReserva(
     @CurrentUserDecorator() user: CurrentUser,
-    @Param('id') validationCitaId: string,
-    @Body() dto: AprobarPagoReservaDto,
+    @Param('validationCitaId') validationCitaId: string,
+    @Body() dto: GuardarGoogleMeetDto,
   ) {
-    return this.reunionesService.aprobarPagoReserva(
-      user,
-      validationCitaId,
-      dto,
-    );
+    return this.reunionesService.aprobarPagoReserva(user, validationCitaId, dto);
   }
 
-  @Patch('validaciones/:id/admin')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
-  validarCitaAdmin(
-    @Param('id') validationCitaId: string,
-    @Body() dto: ValidarCitaAdminDto,
-  ) {
-    return this.reunionesService.validarCitaAdmin(validationCitaId, dto);
-  }
-
-  @Post(':id/meet')
-  crearMeet(
+  @Post(':reunionId/google-meet')
+  guardarGoogleMeet(
     @CurrentUserDecorator() user: CurrentUser,
-    @Param('id') reunionId: string,
+    @Param('reunionId') reunionId: string,
+    @Body() dto: GuardarGoogleMeetDto,
   ) {
-    return this.reunionesService.crearMeet(user, reunionId);
+    return this.reunionesService.guardarGoogleMeet(user, reunionId, dto);
+  }
+
+  @Post(':reunionId/google-meet/crear')
+  crearGoogleMeet(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('reunionId') reunionId: string,
+  ) {
+    return this.reunionesService.crearGoogleMeet(user, reunionId);
   }
 }

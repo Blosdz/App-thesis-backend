@@ -14,32 +14,33 @@ import { ActualizarModuloDto } from './dto/actualizar-modulo.dto';
 import { CrearModuloTesisDto } from './dto/crear-modulo-tesis.dto';
 import { ModulosService } from './modulos.service';
 
-@Controller('modulos')
 @UseGuards(JwtAuthGuard)
+@Controller('modulos')
 export class ModulosController {
   constructor(private readonly modulosService: ModulosService) {}
 
-  @Get('tesis/:tesisId')
-  listarPorTesis(
-    @CurrentUserDecorator() user: CurrentUser,
-    @Param('tesisId') tesisId: string,
-  ) {
-    return this.modulosService.listarPorTesis(user, tesisId);
+  @Get()
+  listarCatalogo() {
+    return this.modulosService.listarCatalogo();
   }
 
-  @Post('tesis/:tesisId')
+  @Get('tesis/:tesisId')
+  listarPorTesis(@Param('tesisId') tesisId: string) {
+    return this.modulosService.listarPorTesis(tesisId);
+  }
+
+  @Post('tesis')
   crearParaTesis(
     @CurrentUserDecorator() user: CurrentUser,
-    @Param('tesisId') tesisId: string,
     @Body() dto: CrearModuloTesisDto,
   ) {
-    return this.modulosService.crearParaTesis(user, tesisId, dto);
+    return this.modulosService.crearParaTesis(user, dto);
   }
 
-  @Patch(':id')
+  @Patch(':moduloId')
   actualizar(
     @CurrentUserDecorator() user: CurrentUser,
-    @Param('id') moduloId: string,
+    @Param('moduloId') moduloId: string,
     @Body() dto: ActualizarModuloDto,
   ) {
     return this.modulosService.actualizar(user, moduloId, dto);

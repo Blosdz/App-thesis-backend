@@ -2,5 +2,8 @@ import { IsUUID } from 'class-validator';
 
 export class CrearModuloTesisDto {
   @IsUUID()
-  moduloListaId: string;
+  tesisId!: string;
+
+  @IsUUID()
+  moduloListaId!: string;
 }

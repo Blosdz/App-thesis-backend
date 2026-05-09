@@ -6,13 +6,15 @@ import { RegistrarLeadDto } from './dto/registrar-lead.dto';
 export class LeadsService {
   constructor(private readonly databaseService: DatabaseService) {}
 
-  async registrar(dto: RegistrarLeadDto) {
-    const result = await this.databaseService.query<{
-      data: Record<string, unknown>;
-    }>(
-      'SELECT "AT".registrar_lead_estudiante($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) AS data',
+  async registrarEstudiante(dto: RegistrarLeadDto) {
+    const result = await this.databaseService.query(
+      `INSERT INTO "AT".leads_estudiantes
+         (telefono, nombre, email, nivel_academico, tipo_tesis_codigo,
+          requiere_analisis_estadistico, plan_recomendado_id, precio_cotizado, metadata)
+       VALUES ($1, $2, lower($3), $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
       [
-        dto.telefono,
+        dto.telefono ?? null,
         dto.nombre ?? null,
         dto.email ?? null,
         dto.nivelAcademico ?? null,
@@ -20,11 +22,13 @@ export class LeadsService {
         dto.requiereAnalisisEstadistico ?? null,
         dto.planRecomendadoId ?? null,
         dto.precioCotizado ?? null,
-        'nuevo',
         dto.metadata ?? {},
       ],
     );
-
-    return { ok: true, data: result.rows[0]?.data };
+    return {
+      ok: true,
+      message: 'Lead registrado correctamente',
+      data: result.rows[0],
+    };
   }
 }

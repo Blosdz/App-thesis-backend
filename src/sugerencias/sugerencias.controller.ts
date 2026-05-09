@@ -10,13 +10,13 @@ import {
 import { CurrentUserDecorator } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
+import { ActualizarEstadoSugerenciaDto } from './dto/actualizar-estado-sugerencia.dto';
 import { CrearSugerenciaDto } from './dto/crear-sugerencia.dto';
 import { MarcarSugerenciaDto } from './dto/marcar-sugerencia.dto';
-import { ValidarSugerenciaDto } from './dto/validar-sugerencia.dto';
 import { SugerenciasService } from './sugerencias.service';
 
-@Controller('sugerencias')
 @UseGuards(JwtAuthGuard)
+@Controller('sugerencias')
 export class SugerenciasController {
   constructor(private readonly sugerenciasService: SugerenciasService) {}
 
@@ -29,25 +29,40 @@ export class SugerenciasController {
   }
 
   @Get('tesis/:tesisId')
-  listar(@Param('tesisId') tesisId: string) {
-    return this.sugerenciasService.listar(tesisId);
+  listarPorTesis(@Param('tesisId') tesisId: string) {
+    return this.sugerenciasService.listarPorTesis(tesisId);
   }
 
-  @Patch(':id/aplicada')
-  marcar(
+  @Get('tesis/:tesisId/validacion')
+  listarValidacion(@Param('tesisId') tesisId: string) {
+    return this.sugerenciasService.listarPorTesis(tesisId);
+  }
+
+  @Get('tipos')
+  tipos() {
+    return this.sugerenciasService.tipos();
+  }
+
+  @Patch(':sugerenciaId/aplicada')
+  marcarAplicada(
     @CurrentUserDecorator() user: CurrentUser,
-    @Param('id') sugerenciaId: string,
+    @Param('sugerenciaId') sugerenciaId: string,
     @Body() dto: MarcarSugerenciaDto,
   ) {
-    return this.sugerenciasService.marcar(user, sugerenciaId, dto);
+    return this.sugerenciasService.marcarAplicada(user, sugerenciaId, dto);
   }
 
-  @Patch(':id/validar')
-  validar(
+  @Patch(':sugerenciaId/estado')
+  actualizarEstado(
     @CurrentUserDecorator() user: CurrentUser,
-    @Param('id') historialSugerenciaId: string,
-    @Body() dto: ValidarSugerenciaDto,
+    @Param('sugerenciaId') sugerenciaId: string,
+    @Body() dto: ActualizarEstadoSugerenciaDto,
   ) {
-    return this.sugerenciasService.validar(user, historialSugerenciaId, dto);
+    return this.sugerenciasService.actualizarEstado(user, sugerenciaId, dto);
+  }
+
+  @Get(':sugerenciaId/log')
+  log(@Param('sugerenciaId') sugerenciaId: string) {
+    return this.sugerenciasService.log(sugerenciaId);
   }
 }

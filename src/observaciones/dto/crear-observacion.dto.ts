@@ -2,19 +2,14 @@ import { IsOptional, IsString, IsUUID } from 'class-validator';
 
 export class CrearObservacionDto {
   @IsUUID()
-  tesisId: string;
+  tesisId!: string;
 
   @IsOptional()
   @IsUUID()
   documentoTesisId?: string;
 
-  @IsOptional()
-  @IsUUID()
-  reunionId?: string;
-
-  @IsOptional()
-  @IsUUID()
-  validationCitaId?: string;
+  @IsString()
+  texto!: string;
 
   @IsOptional()
   @IsString()
@@ -22,16 +17,8 @@ export class CrearObservacionDto {
 
   @IsOptional()
   @IsString()
-  texto?: string;
-
-  @IsOptional()
-  @IsString()
   contenidoHtml?: string;
 
   @IsOptional()
   contenidoDelta?: Record<string, unknown>;
-
-  @IsOptional()
-  @IsString()
-  tipoOrigen?: string;
 }

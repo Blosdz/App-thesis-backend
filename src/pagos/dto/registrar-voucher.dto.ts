@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsNumber, IsOptional, IsString } from 'class-validator';
 
 export class RegistrarVoucherDto {
   @IsOptional()
@@ -23,9 +23,9 @@ export class RegistrarVoucherDto {
 
   @IsOptional()
   @IsNumber()
-  @Min(0)
   tamanoBytesVoucher?: number;
 
   @IsOptional()
-  metadata?: Record<string, unknown>;
+  @IsString()
+  paymentMethod?: string;
 }

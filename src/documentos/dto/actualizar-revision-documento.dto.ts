@@ -2,7 +2,7 @@ import { IsIn, IsOptional, IsString } from 'class-validator';
 
 export class ActualizarRevisionDocumentoDto {
   @IsIn(['pendiente', 'aprobado', 'rechazado'])
-  estadoRevision: string;
+  estadoRevision!: string;
 
   @IsOptional()
   @IsString()

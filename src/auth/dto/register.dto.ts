@@ -5,13 +5,14 @@ import {
   IsString,
   MinLength,
 } from 'class-validator';
+import type { CurrentUser } from '../../common/interfaces/current-user.interface';
 
 export class RegisterDto {
   @IsEmail()
-  email: string;
+  email!: string;
 
   @IsIn(['admin', 'asesor', 'estudiante'])
-  rol: 'admin' | 'asesor' | 'estudiante';
+  rol!: CurrentUser['rol'];
 
   @IsOptional()
   @IsString()

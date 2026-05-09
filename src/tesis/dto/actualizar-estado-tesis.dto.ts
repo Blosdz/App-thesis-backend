@@ -9,5 +9,5 @@ export class ActualizarEstadoTesisDto {
     'completado',
     'cancelado',
   ])
-  estado: string;
+  estado!: string;
 }

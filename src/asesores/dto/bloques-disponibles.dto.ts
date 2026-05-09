@@ -1,12 +1,9 @@
-import { IsDateString, IsUUID } from 'class-validator';
+import { IsDateString } from 'class-validator';
 
 export class BloquesDisponiblesDto {
-  @IsUUID()
-  asesorId: string;
+  @IsDateString()
+  desde!: string;
 
   @IsDateString()
-  desde: string;
-
-  @IsDateString()
-  hasta: string;
+  hasta!: string;
 }

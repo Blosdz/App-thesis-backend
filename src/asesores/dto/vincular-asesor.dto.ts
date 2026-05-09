@@ -1,6 +1,8 @@
-import { IsString } from 'class-validator';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class VincularAsesorDto {
+  @IsOptional()
   @IsString()
-  valor: string;
+  @MaxLength(500)
+  mensaje?: string;
 }

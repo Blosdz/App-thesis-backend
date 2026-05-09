@@ -1,25 +1,30 @@
 import {
   IsBoolean,
   IsDateString,
-  IsISO8601,
-  IsNumber,
+  IsInt,
   IsOptional,
+  IsUUID,
+  Max,
   Min,
 } from 'class-validator';
 
 export class CrearEspacioLibreDto {
-  @IsISO8601()
-  inicio: string;
+  @IsOptional()
+  @IsUUID()
+  asesorId?: string;
 
-  @IsISO8601()
-  fin: string;
+  @IsDateString()
+  inicio!: string;
+
+  @IsDateString()
+  fin!: string;
 
   @IsOptional()
   @IsBoolean()
   usaBloques?: boolean;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt()
   @Min(1)
   duracionBloqueMinutos?: number;
 
@@ -28,8 +33,10 @@ export class CrearEspacioLibreDto {
   recurrente?: boolean;
 
   @IsOptional()
-  @IsNumber({}, { each: true })
-  diasSemana?: number[];
+  @IsInt()
+  @Min(0)
+  @Max(6)
+  diaSemana?: number;
 
   @IsOptional()
   @IsDateString()

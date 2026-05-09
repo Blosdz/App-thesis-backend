@@ -13,15 +13,45 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUserDecorator } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
-import { DocumentosService } from './documentos.service';
 import { ActualizarRevisionDocumentoDto } from './dto/actualizar-revision-documento.dto';
 import { RegistrarDocumentoDto } from './dto/registrar-documento.dto';
-import { UploadDocumentoDto } from './dto/upload-documento.dto';
+import { DocumentosService } from './documentos.service';
 
-@Controller('documentos')
 @UseGuards(JwtAuthGuard)
+@Controller('documentos')
 export class DocumentosController {
   constructor(private readonly documentosService: DocumentosService) {}
+
+  @Post('tesis')
+  registrar(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Body() dto: RegistrarDocumentoDto,
+  ) {
+    return this.documentosService.registrar(user, dto);
+  }
+
+  @Post('tesis/:tesisId/carpeta-drive')
+  crearCarpetaDrive(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('tesisId') tesisId: string,
+  ) {
+    return this.documentosService.crearCarpetaDrive(user, tesisId);
+  }
+
+  @Post('tesis/:tesisId/archivo')
+  @UseInterceptors(FileInterceptor('file'))
+  subirArchivo(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('tesisId') tesisId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('modo') modo = 'tesis',
+    @Body('tipo_documento') tipoDocumento?: string,
+  ) {
+    return this.documentosService.subirArchivo(user, tesisId, file, {
+      modo,
+      tipoDocumento,
+    });
+  }
 
   @Get('tesis/:tesisId')
   listarPorTesis(
@@ -31,28 +61,23 @@ export class DocumentosController {
     return this.documentosService.listarPorTesis(user, tesisId);
   }
 
-  @Post()
-  registrar(
+  @Get('tesis/:tesisId/asignada')
+  listarPorTesisAsignada(
     @CurrentUserDecorator() user: CurrentUser,
-    @Body() dto: RegistrarDocumentoDto,
+    @Param('tesisId') tesisId: string,
   ) {
-    return this.documentosService.registrar(user, dto);
+    return this.documentosService.listarPorTesis(user, tesisId);
   }
 
-  @Post('upload')
-  @UseInterceptors(FileInterceptor('file'))
-  upload(
-    @CurrentUserDecorator() user: CurrentUser,
-    @UploadedFile() file: Express.Multer.File,
-    @Body() dto: UploadDocumentoDto,
-  ) {
-    return this.documentosService.upload(user, file, dto);
+  @Get('tesis/:tesisId/apoyo')
+  listarApoyo(@Param('tesisId') tesisId: string) {
+    return this.documentosService.listarApoyo(tesisId);
   }
 
-  @Patch(':id/revision')
+  @Patch(':documentoId/revision')
   actualizarRevision(
     @CurrentUserDecorator() user: CurrentUser,
-    @Param('id') documentoId: string,
+    @Param('documentoId') documentoId: string,
     @Body() dto: ActualizarRevisionDocumentoDto,
   ) {
     return this.documentosService.actualizarRevision(user, documentoId, dto);

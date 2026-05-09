@@ -1,9 +1,14 @@
 import { Module } from '@nestjs/common';
-import { SuscripcionesController } from './suscripciones.controller';
+import { DatabaseModule } from '../database/database.module';
+import {
+  BeneficiosController,
+  SuscripcionesController,
+} from './suscripciones.controller';
 import { SuscripcionesService } from './suscripciones.service';
 
 @Module({
-  controllers: [SuscripcionesController],
+  imports: [DatabaseModule],
+  controllers: [SuscripcionesController, BeneficiosController],
   providers: [SuscripcionesService],
 })
 export class SuscripcionesModule {}

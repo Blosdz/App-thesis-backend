@@ -5,12 +5,12 @@ import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { CrearObservacionDto } from './dto/crear-observacion.dto';
 import { ObservacionesService } from './observaciones.service';
 
-@Controller('observaciones')
 @UseGuards(JwtAuthGuard)
+@Controller('observaciones')
 export class ObservacionesController {
   constructor(private readonly observacionesService: ObservacionesService) {}
 
-  @Post()
+  @Post('tesis')
   crear(
     @CurrentUserDecorator() user: CurrentUser,
     @Body() dto: CrearObservacionDto,
@@ -18,7 +18,7 @@ export class ObservacionesController {
     return this.observacionesService.crear(user, dto);
   }
 
-  @Get('tesis/:tesisId')
+  @Get('tesis/:tesisId/historial')
   historial(@Param('tesisId') tesisId: string) {
     return this.observacionesService.historial(tesisId);
   }

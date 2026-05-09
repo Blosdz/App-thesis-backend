@@ -1,22 +1,20 @@
-import { IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class GuardarPerfilEstudianteDto {
   @IsString()
-  nombres: string;
+  @MaxLength(150)
+  nombres!: string;
 
   @IsString()
-  apellidos: string;
+  @MaxLength(150)
+  apellidos!: string;
 
+  @IsOptional()
   @IsUUID()
-  universidadId: string;
-
-  @IsString()
-  carrera: string;
-
-  @IsString()
-  dni: string;
+  universidadId?: string;
 
   @IsOptional()
   @IsString()
-  telefono?: string;
+  @MaxLength(150)
+  carrera?: string;
 }

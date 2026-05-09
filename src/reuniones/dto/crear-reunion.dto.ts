@@ -1,25 +1,52 @@
-import { IsISO8601, IsOptional, IsString, IsUUID } from 'class-validator';
+import {
+  IsDateString,
+  IsIn,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Min,
+} from 'class-validator';
 
 export class CrearReunionDto {
   @IsUUID()
-  disponibilidadId: string;
-
-  @IsISO8601()
-  inicio: string;
-
-  @IsISO8601()
-  fin: string;
+  asesorId!: string;
 
   @IsOptional()
   @IsUUID()
   tesisId?: string;
 
   @IsOptional()
+  @IsUUID()
+  disponibilidadId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  tarifaId?: string;
+
+  @IsDateString()
+  inicio!: string;
+
+  @IsDateString()
+  fin!: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  duracionMinutos?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  costoReunion?: number;
+
+  @IsOptional()
   @IsString()
   motivo?: string;
 
   @IsOptional()
-  @IsString()
+  @IsIn(['virtual', 'presencial'])
   modalidad?: string;
 
   @IsOptional()
@@ -28,9 +55,9 @@ export class CrearReunionDto {
 
   @IsOptional()
   @IsString()
-  enlaceReunion?: string;
+  notas?: string;
 
   @IsOptional()
   @IsString()
-  notas?: string;
+  tipoReunion?: string;
 }

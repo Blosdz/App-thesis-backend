@@ -7,7 +7,7 @@ export class LeadsController {
   constructor(private readonly leadsService: LeadsService) {}
 
   @Post('estudiante')
-  registrar(@Body() dto: RegistrarLeadDto) {
-    return this.leadsService.registrar(dto);
+  registrarEstudiante(@Body() dto: RegistrarLeadDto) {
+    return this.leadsService.registrarEstudiante(dto);
   }
 }

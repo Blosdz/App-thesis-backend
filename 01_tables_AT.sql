@@ -30,7 +30,7 @@ SET default_table_access_method = heap;
 CREATE TABLE "AT".auth_usuarios (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     email varchar(255) NOT NULL UNIQUE,
-    contrasena_hash text NOT NULL DEFAULT crypt('app_theseis', gen_salt('bf', 12)),
+    contrasena_hash text NOT NULL,
     activo boolean DEFAULT true,
     email_verificado boolean DEFAULT false,
     ultimo_login_en timestamptz NULL,

@@ -1,74 +1,134 @@
-import { Injectable } from '@nestjs/common';
-import { CurrentUser } from '../common/interfaces/current-user.interface';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { DatabaseService } from '../database/database.service';
+import { ActualizarEstadoSugerenciaDto } from './dto/actualizar-estado-sugerencia.dto';
 import { CrearSugerenciaDto } from './dto/crear-sugerencia.dto';
 import { MarcarSugerenciaDto } from './dto/marcar-sugerencia.dto';
-import { ValidarSugerenciaDto } from './dto/validar-sugerencia.dto';
 
 @Injectable()
 export class SugerenciasService {
   constructor(private readonly databaseService: DatabaseService) {}
 
   async crear(user: CurrentUser, dto: CrearSugerenciaDto) {
-    const sql = dto.tipoSugerenciaId
-      ? 'SELECT * FROM "AT".crear_sugerencia_asesor($1, $2, $3, $4)'
-      : 'SELECT * FROM "AT".crear_sugerencia_asesor($1, $2, $3)';
-    const params = dto.tipoSugerenciaId
-      ? [
-          dto.tesisId,
-          dto.documentoTesisId ?? null,
-          dto.tipoSugerenciaId,
-          dto.detalle,
-        ]
-      : [dto.tesisId, dto.documentoTesisId ?? null, dto.detalle];
-
-    const result = await this.databaseService.queryWithUser(
-      user.auth_usuario_id,
-      sql,
-      params,
+    if (user.rol !== 'asesor' && user.rol !== 'admin') {
+      throw new ForbiddenException(
+        'Esta operación requiere rol asesor o admin',
+      );
+    }
+    const result = await this.databaseService.query(
+      `INSERT INTO "AT".historial_sugerencias_asesor
+         (tesis_id, asesor_id, documento_tesis_id, sugerencia, detalle, tipo_sugerencia_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [
+        dto.tesisId,
+        user.usuario_id,
+        dto.documentoTesisId ?? null,
+        dto.sugerencia,
+        dto.detalle ?? null,
+        dto.tipoSugerenciaId ?? null,
+      ],
     );
-
-    return { ok: true, data: result.rows[0] };
+    return {
+      ok: true,
+      message: 'Sugerencia registrada correctamente',
+      data: result.rows[0],
+    };
   }
 
-  async listar(tesisId: string) {
+  async listarPorTesis(tesisId: string) {
     const result = await this.databaseService.query(
-      'SELECT * FROM "AT".listar_sugerencias_tesis($1)',
+      `SELECT h.*, ts.nombre AS tipo_sugerencia_nombre
+       FROM "AT".historial_sugerencias_asesor h
+       LEFT JOIN "AT".tipos_sugerencia_asesor ts ON ts.id = h.tipo_sugerencia_id
+       WHERE h.tesis_id = $1
+       ORDER BY h.creado_en DESC`,
       [tesisId],
     );
-
     return { ok: true, data: result.rows };
   }
 
-  async marcar(
+  async tipos() {
+    const result = await this.databaseService.query(
+      `SELECT *
+       FROM "AT".tipos_sugerencia_asesor
+       WHERE activo = true
+       ORDER BY nombre ASC`,
+    );
+    return { ok: true, data: result.rows };
+  }
+
+  async marcarAplicada(
     user: CurrentUser,
     sugerenciaId: string,
     dto: MarcarSugerenciaDto,
   ) {
-    const result = await this.databaseService.queryWithUser<{
-      data: Record<string, unknown>;
-    }>(
-      user.auth_usuario_id,
-      'SELECT * FROM "AT".marcar_sugerencia_aplicada_estudiante($1, $2)',
-      [sugerenciaId, dto.aplicado],
+    const result = await this.databaseService.query(
+      `UPDATE "AT".historial_sugerencias_asesor h
+       SET aplicado_por_estudiante = $3,
+           aplicado = $3,
+           aplicado_por = $2,
+           aplicado_en = CASE WHEN $3 THEN now() ELSE NULL END,
+           actualizado_en = now()
+       FROM "AT".tesis t
+       WHERE h.tesis_id = t.id
+         AND h.id = $1
+         AND (t.estudiante_id = $2 OR $4 = 'admin')
+       RETURNING h.*`,
+      [sugerenciaId, user.usuario_id, dto.aplicado, user.rol],
     );
-
-    return { ok: true, data: result.rows[0] };
+    if (!result.rows[0]) {
+      throw new NotFoundException('Sugerencia no encontrada');
+    }
+    return {
+      ok: true,
+      message: 'Sugerencia actualizada correctamente',
+      data: result.rows[0],
+    };
   }
 
-  async validar(
+  async actualizarEstado(
     user: CurrentUser,
-    historialSugerenciaId: string,
-    dto: ValidarSugerenciaDto,
+    sugerenciaId: string,
+    dto: ActualizarEstadoSugerenciaDto,
   ) {
-    const result = await this.databaseService.queryWithUser<{
-      data: Record<string, unknown>;
-    }>(
-      user.auth_usuario_id,
-      'SELECT "AT".validar_aplicacion_sugerencia($1, $2, $3) AS data',
-      [historialSugerenciaId, dto.aprobado, dto.comentarioAsesor ?? null],
+    const result = await this.databaseService.query(
+      `UPDATE "AT".validaciones_sugerencia_asesor
+       SET estado = $3,
+           comentario_asesor = COALESCE($4, comentario_asesor),
+           verificado_por_asesor = ($3 = 'verificado'),
+           verificado_en = CASE WHEN $3 IN ('verificado', 'rechazado') THEN now() ELSE verificado_en END,
+           actualizado_en = now()
+       WHERE historial_sugerencia_id = $1
+         AND (asesor_id = $2 OR $5 = 'admin')
+       RETURNING *`,
+      [
+        sugerenciaId,
+        user.usuario_id,
+        dto.estado,
+        dto.comentario ?? null,
+        user.rol,
+      ],
     );
+    return {
+      ok: true,
+      message: 'Estado de sugerencia actualizado',
+      data: result.rows[0] ?? null,
+    };
+  }
 
-    return { ok: true, data: result.rows[0]?.data };
+  async log(sugerenciaId: string) {
+    const result = await this.databaseService.query(
+      `SELECT *
+       FROM "AT".vw_log_validacion_sugerencia
+       WHERE historial_sugerencia_id = $1
+       ORDER BY creado_en ASC`,
+      [sugerenciaId],
+    );
+    return { ok: true, data: result.rows };
   }
 }

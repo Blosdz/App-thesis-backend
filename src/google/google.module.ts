@@ -1,12 +1,12 @@
 import { Module } from '@nestjs/common';
-import { GoogleAuthService } from './google-auth.service';
-import { GoogleCalendarService } from './google-calendar.service';
+import { DatabaseModule } from '../database/database.module';
 import { GoogleController } from './google.controller';
-import { GoogleDriveService } from './google-drive.service';
+import { GoogleService } from './google.service';
 
 @Module({
+  imports: [DatabaseModule],
   controllers: [GoogleController],
-  providers: [GoogleAuthService, GoogleDriveService, GoogleCalendarService],
-  exports: [GoogleDriveService, GoogleCalendarService],
+  providers: [GoogleService],
+  exports: [GoogleService],
 })
 export class GoogleModule {}

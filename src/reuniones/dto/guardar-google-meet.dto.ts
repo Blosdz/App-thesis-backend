@@ -1,15 +1,19 @@
 import { IsOptional, IsString } from 'class-validator';
 
-export class AprobarPagoReservaDto {
+export class GuardarGoogleMeetDto {
+  @IsOptional()
+  @IsString()
+  googleEventId?: string;
+
   @IsOptional()
   @IsString()
   enlaceReunion?: string;
 
   @IsOptional()
   @IsString()
-  lugar?: string;
+  meetCodigo?: string;
 
   @IsOptional()
   @IsString()
-  notas?: string;
+  meetError?: string;
 }

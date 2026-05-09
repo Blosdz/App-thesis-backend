@@ -10,92 +10,92 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { CurrentUserDecorator } from '../common/decorators/current-user.decorator';
-import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
-import { AsignarTesisAsesorDto } from './dto/asignar-tesis-asesor.dto';
+import { AsesoresService } from './asesores.service';
 import { BloquesDisponiblesDto } from './dto/bloques-disponibles.dto';
 import { CambiarEstadoRelacionDto } from './dto/cambiar-estado-relacion.dto';
 import { CrearEspacioLibreDto } from './dto/crear-espacio-libre.dto';
 import { VincularAsesorDto } from './dto/vincular-asesor.dto';
-import { AsesoresService } from './asesores.service';
 
 @Controller('asesores')
 export class AsesoresController {
   constructor(private readonly asesoresService: AsesoresService) {}
 
   @Get()
-  listar() {
-    return this.asesoresService.listar();
+  obtenerAsesores() {
+    return this.asesoresService.obtenerAsesores();
   }
 
-  @Post('vincular/slug')
   @UseGuards(JwtAuthGuard)
-  vincularPorSlug(
-    @CurrentUserDecorator() user: CurrentUser,
-    @Body() dto: VincularAsesorDto,
-  ) {
-    return this.asesoresService.vincularPorSlug(user, dto);
-  }
-
-  @Post('vincular/codigo')
-  @UseGuards(JwtAuthGuard)
-  vincularPorCodigo(
-    @CurrentUserDecorator() user: CurrentUser,
-    @Body() dto: VincularAsesorDto,
-  ) {
-    return this.asesoresService.vincularPorCodigo(user, dto);
-  }
-
-  @Post('codigo-publico')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('asesor')
-  generarCodigo(@CurrentUserDecorator() user: CurrentUser) {
-    return this.asesoresService.generarCodigo(user);
-  }
-
-  @Get('codigo-publico/me')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('asesor')
-  obtenerCodigo(@CurrentUserDecorator() user: CurrentUser) {
-    return this.asesoresService.obtenerCodigo(user);
-  }
-
   @Get('mis-asesores')
-  @UseGuards(JwtAuthGuard)
-  misAsesores(@CurrentUserDecorator() user: CurrentUser) {
-    return this.asesoresService.misAsesores(user);
+  obtenerMisAsesores(@CurrentUserDecorator() user: CurrentUser) {
+    return this.asesoresService.obtenerMisAsesores(user);
   }
 
-  @Get('mis-estudiantes')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('asesor')
-  misEstudiantes(@CurrentUserDecorator() user: CurrentUser) {
-    return this.asesoresService.misEstudiantes(user);
+  @UseGuards(JwtAuthGuard)
+  @Get('estudiantes')
+  obtenerEstudiantesAsesor(@CurrentUserDecorator() user: CurrentUser) {
+    return this.asesoresService.obtenerEstudiantesAsesor(user);
   }
 
-  @Patch('relaciones/:id/estado')
   @UseGuards(JwtAuthGuard)
+  @Post('codigo-publico')
+  generarCodigoPublico(@CurrentUserDecorator() user: CurrentUser) {
+    return this.asesoresService.generarCodigoPublico(user);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('mi-codigo-publico')
+  obtenerMiCodigoPublico(@CurrentUserDecorator() user: CurrentUser) {
+    return this.asesoresService.obtenerMiCodigoPublico(user);
+  }
+
+  @Get(':asesorId/perfil-publico')
+  obtenerPerfilPublico(@Param('asesorId') asesorId: string) {
+    return this.asesoresService.obtenerPerfilPublico(asesorId);
+  }
+}
+
+@UseGuards(JwtAuthGuard)
+@Controller('relaciones')
+export class RelacionesController {
+  constructor(private readonly asesoresService: AsesoresService) {}
+
+  @Patch(':relacionId/estado')
   cambiarEstadoRelacion(
-    @Param('id') relacionId: string,
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('relacionId') relacionId: string,
     @Body() dto: CambiarEstadoRelacionDto,
   ) {
-    return this.asesoresService.cambiarEstadoRelacion(relacionId, dto);
+    return this.asesoresService.cambiarEstadoRelacion(user, relacionId, dto);
   }
 
-  @Post('tesis/asignar')
-  @UseGuards(JwtAuthGuard)
-  asignarTesis(
+  @Post('asesor/slug/:slug')
+  vincularPorSlug(
     @CurrentUserDecorator() user: CurrentUser,
-    @Body() dto: AsignarTesisAsesorDto,
+    @Param('slug') slug: string,
+    @Body() dto: VincularAsesorDto,
   ) {
-    return this.asesoresService.asignarTesis(user, dto);
+    return this.asesoresService.vincularPorSlug(user, slug, dto);
   }
 
-  @Post('agenda/espacios-libres')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('asesor')
+  @Post('asesor/codigo/:codigo')
+  vincularPorCodigo(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('codigo') codigo: string,
+    @Body() dto: VincularAsesorDto,
+  ) {
+    return this.asesoresService.vincularPorCodigo(user, codigo, dto);
+  }
+}
+
+@Controller('disponibilidad')
+export class DisponibilidadController {
+  constructor(private readonly asesoresService: AsesoresService) {}
+
+  @UseGuards(JwtAuthGuard)
+  @Post()
   crearEspacioLibre(
     @CurrentUserDecorator() user: CurrentUser,
     @Body() dto: CrearEspacioLibreDto,
@@ -103,25 +103,26 @@ export class AsesoresController {
     return this.asesoresService.crearEspacioLibre(user, dto);
   }
 
-  @Get('agenda/espacios-libres')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('asesor')
-  listarEspaciosLibres(@CurrentUserDecorator() user: CurrentUser) {
-    return this.asesoresService.listarEspaciosLibres(user);
+  @UseGuards(JwtAuthGuard)
+  @Get('mis-espacios')
+  misEspaciosLibres(@CurrentUserDecorator() user: CurrentUser) {
+    return this.asesoresService.misEspaciosLibres(user);
   }
 
-  @Delete('agenda/espacios-libres/:id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('asesor')
-  desactivarEspacioLibre(
+  @UseGuards(JwtAuthGuard)
+  @Delete(':disponibilidadId')
+  desactivarEspacio(
     @CurrentUserDecorator() user: CurrentUser,
-    @Param('id') disponibilidadId: string,
+    @Param('disponibilidadId') disponibilidadId: string,
   ) {
-    return this.asesoresService.desactivarEspacioLibre(user, disponibilidadId);
+    return this.asesoresService.desactivarEspacio(user, disponibilidadId);
   }
 
-  @Get('agenda/bloques-disponibles')
-  bloquesDisponibles(@Query() query: BloquesDisponiblesDto) {
-    return this.asesoresService.bloquesDisponibles(query);
+  @Get('asesor/:asesorId/bloques')
+  bloquesDisponibles(
+    @Param('asesorId') asesorId: string,
+    @Query() query: BloquesDisponiblesDto,
+  ) {
+    return this.asesoresService.bloquesDisponibles(asesorId, query);
   }
 }

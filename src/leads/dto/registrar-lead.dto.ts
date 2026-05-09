@@ -1,5 +1,6 @@
 import {
   IsBoolean,
+  IsEmail,
   IsNumber,
   IsOptional,
   IsString,
@@ -7,15 +8,16 @@ import {
 } from 'class-validator';
 
 export class RegistrarLeadDto {
+  @IsOptional()
   @IsString()
-  telefono: string;
+  telefono?: string;
 
   @IsOptional()
   @IsString()
   nombre?: string;
 
   @IsOptional()
-  @IsString()
+  @IsEmail()
   email?: string;
 
   @IsOptional()

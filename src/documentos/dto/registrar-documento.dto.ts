@@ -2,26 +2,23 @@ import { IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 
 export class RegistrarDocumentoDto {
   @IsUUID()
-  tesisId: string;
-
-  @IsString()
-  nombreArchivo: string;
-
-  @IsString()
-  urlArchivoDrive: string;
+  tesisId!: string;
 
   @IsOptional()
   @IsString()
-  carpetaDriveId?: string;
+  nombreArchivo?: string;
+
+  @IsOptional()
+  @IsString()
+  urlArchivoDrive?: string;
 
   @IsOptional()
   @IsString()
   documentoDriveId?: string;
 
   @IsOptional()
-  @IsNumber()
-  @Min(1)
-  version?: number;
+  @IsString()
+  rutaStorage?: string;
 
   @IsOptional()
   @IsString()

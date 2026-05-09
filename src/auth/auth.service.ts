@@ -1,33 +1,30 @@
 import {
   BadRequestException,
   Injectable,
+  InternalServerErrorException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { randomUUID } from 'crypto';
 import { JwtService } from '@nestjs/jwt';
+import { createHash, randomBytes } from 'crypto';
+import { QueryResultRow } from 'pg';
+import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { DatabaseService } from '../database/database.service';
-import { CurrentUser } from '../common/interfaces/current-user.interface';
-import { CreateInvitationDto } from './dto/create-invitation.dto';
-import { LoginDto } from './dto/login.dto';
-import { RegisterDto } from './dto/register.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
-import { ResetPasswordConfirmDto } from './dto/reset-password-confirm.dto';
-import { ResetPasswordRequestDto } from './dto/reset-password-request.dto';
+import { LoginDto } from './dto/login.dto';
+import {
+  PasswordResetDto,
+  PasswordResetRequestDto,
+} from './dto/password-reset.dto';
+import { RegisterDto } from './dto/register.dto';
 
-export interface AuthUsuarioRow {
+export interface JwtPayload {
+  sub: string;
   auth_usuario_id: string;
-  usuario_id: string;
   email: string;
   rol: CurrentUser['rol'];
-  verificado: boolean;
-  email_verificado: boolean;
-  activo: boolean;
 }
 
-export interface ChangePasswordRow {
-  ok: boolean;
-  message: string;
-}
+interface UserRow extends QueryResultRow, CurrentUser {}
 
 @Injectable()
 export class AuthService {
@@ -38,129 +35,259 @@ export class AuthService {
 
   async register(dto: RegisterDto) {
     try {
-      const result = await this.databaseService.query<AuthUsuarioRow>(
-        'SELECT * FROM "AT".fn_auth_crear_usuario($1, $2, $3)',
-        [dto.email, dto.rol, dto.contrasena ?? 'app_theseis'],
+      const password = dto.contrasena ?? 'app_theseis';
+      const usuario = await this.databaseService.withTransaction(
+        async (client) => {
+          const authResult = await client.query<{
+            id: string;
+            email: string;
+            email_verificado: boolean;
+          }>(
+            `INSERT INTO "AT".auth_usuarios (email, contrasena_hash)
+           VALUES (lower($1), crypt($2, gen_salt('bf', 12)))
+           RETURNING id, email, email_verificado`,
+            [dto.email, password],
+          );
+
+          const usuarioResult = await client.query<UserRow>(
+            `INSERT INTO "AT".usuarios (auth_usuario_id, rol)
+           VALUES ($1, $2)
+           RETURNING id AS usuario_id, auth_usuario_id, rol, verificado`,
+            [authResult.rows[0].id, dto.rol],
+          );
+
+          return {
+            ...usuarioResult.rows[0],
+            email: authResult.rows[0].email,
+            email_verificado: authResult.rows[0].email_verificado,
+          };
+        },
       );
 
       return {
         ok: true,
         message: 'Usuario creado correctamente',
-        data: this.toSafeUser(result.rows[0]),
+        usuario: this.publicUser(usuario),
       };
     } catch (error) {
-      throw new BadRequestException(this.getDbMessage(error));
+      if (this.isPgError(error, '23505')) {
+        throw new BadRequestException('El email ya está registrado');
+      }
+      throw new InternalServerErrorException('No se pudo crear el usuario');
     }
   }
 
   async login(dto: LoginDto) {
-    const result = await this.databaseService.query<AuthUsuarioRow>(
-      'SELECT * FROM "AT".fn_auth_login_usuario($1, $2)',
+    const result = await this.databaseService.query<UserRow>(
+      `SELECT
+         au.id AS auth_usuario_id,
+         u.id AS usuario_id,
+         au.email,
+         u.rol,
+         u.verificado,
+         au.email_verificado
+       FROM "AT".auth_usuarios au
+       JOIN "AT".usuarios u ON u.auth_usuario_id = au.id
+       WHERE au.email = lower($1)
+         AND au.activo = true
+         AND au.contrasena_hash = crypt($2, au.contrasena_hash)
+       LIMIT 1`,
       [dto.email, dto.contrasena],
     );
 
-    if (result.rows.length === 0) {
-      throw new UnauthorizedException('Credenciales incorrectas');
+    const usuario = result.rows[0];
+    if (!usuario) {
+      throw new UnauthorizedException('Credenciales inválidas');
     }
 
-    const usuario = result.rows[0];
-    const payload: CurrentUser = {
-      usuario_id: usuario.usuario_id,
-      auth_usuario_id: usuario.auth_usuario_id,
-      rol: usuario.rol,
-    };
+    await this.databaseService.query(
+      `UPDATE "AT".auth_usuarios
+       SET ultimo_login_en = now(), actualizado_en = now()
+       WHERE id = $1`,
+      [usuario.auth_usuario_id],
+    );
 
     return {
       ok: true,
-      token: await this.jwtService.signAsync(payload),
-      usuario: this.toSafeUser(usuario),
+      token: this.signToken(usuario),
+      usuario: this.publicUser(usuario),
+    };
+  }
+
+  async me(user: CurrentUser) {
+    return {
+      ok: true,
+      usuario: this.publicUser(user),
     };
   }
 
   async changePassword(user: CurrentUser, dto: ChangePasswordDto) {
-    const result = await this.databaseService.query<ChangePasswordRow>(
-      'SELECT * FROM "AT".fn_auth_cambiar_contrasena($1, $2, $3)',
-      [user.auth_usuario_id, dto.contrasenaActual, dto.contrasenaNueva],
+    const result = await this.databaseService.query(
+      `UPDATE "AT".auth_usuarios
+       SET contrasena_hash = crypt($2, gen_salt('bf', 12)), actualizado_en = now()
+       WHERE id = $1
+         AND contrasena_hash = crypt($3, contrasena_hash)`,
+      [user.auth_usuario_id, dto.contrasenaNueva, dto.contrasenaActual],
     );
-    const response = result.rows[0];
 
-    if (!response?.ok) {
-      throw new UnauthorizedException(
-        response?.message ?? 'No se pudo cambiar la contraseña',
+    if (result.rowCount === 0) {
+      throw new UnauthorizedException('La contraseña actual no es correcta');
+    }
+
+    return { ok: true, message: 'Contraseña actualizada correctamente' };
+  }
+
+  async requestPasswordReset(dto: PasswordResetRequestDto) {
+    await this.ensurePasswordResetTable();
+
+    const userResult = await this.databaseService.query<{
+      id: string;
+      email: string;
+    }>(
+      `SELECT id, email
+       FROM "AT".auth_usuarios
+       WHERE email = lower($1) AND activo = true
+       LIMIT 1`,
+      [dto.email],
+    );
+
+    const token = randomBytes(32).toString('hex');
+    const tokenHash = this.hashToken(token);
+
+    if (userResult.rows[0]) {
+      await this.databaseService.query(
+        `INSERT INTO "AT".password_reset_tokens
+           (auth_usuario_id, token_hash, expira_en)
+         VALUES ($1, $2, now() + interval '1 hour')`,
+        [userResult.rows[0].id, tokenHash],
       );
     }
 
-    return response;
+    return {
+      ok: true,
+      message:
+        'Si el correo está registrado, se generó una solicitud de recuperación.',
+      token: userResult.rows[0] ? token : null,
+    };
   }
 
-  async requestPasswordReset(dto: ResetPasswordRequestDto) {
-    const result = await this.databaseService.query<AuthUsuarioRow>(
-      'SELECT * FROM "AT".fn_auth_login_usuario($1, $2)',
-      [dto.email, randomUUID()],
-    );
-    void result;
+  async resetPassword(dto: PasswordResetDto) {
+    await this.ensurePasswordResetTable();
 
-    const token = await this.jwtService.signAsync({
-      email: dto.email.toLowerCase().trim(),
-      purpose: 'password_reset',
+    const tokenHash = this.hashToken(dto.token);
+    const result = await this.databaseService.withTransaction(async (client) => {
+      const tokenResult = await client.query<{
+        id: string;
+        auth_usuario_id: string;
+      }>(
+        `SELECT id, auth_usuario_id
+         FROM "AT".password_reset_tokens
+         WHERE token_hash = $1
+           AND usado_en IS NULL
+           AND expira_en > now()
+         ORDER BY creado_en DESC
+         LIMIT 1
+         FOR UPDATE`,
+        [tokenHash],
+      );
+
+      const row = tokenResult.rows[0];
+      if (!row) {
+        throw new BadRequestException('Token inválido o expirado');
+      }
+
+      await client.query(
+        `UPDATE "AT".auth_usuarios
+         SET contrasena_hash = crypt($2, gen_salt('bf', 12)),
+             actualizado_en = now()
+         WHERE id = $1`,
+        [row.auth_usuario_id, dto.contrasenaNueva],
+      );
+
+      await client.query(
+        `UPDATE "AT".password_reset_tokens
+         SET usado_en = now()
+         WHERE id = $1`,
+        [row.id],
+      );
+
+      return true;
     });
 
     return {
-      ok: true,
-      message: 'Si el correo existe, se generó una solicitud de recuperación',
-      resetToken: token,
+      ok: result,
+      message: 'Contraseña restablecida correctamente',
     };
   }
 
-  async confirmPasswordReset(dto: ResetPasswordConfirmDto) {
-    const payload = await this.jwtService.verifyAsync<{
-      email: string;
-      purpose: string;
-    }>(dto.token);
-
-    if (payload.purpose !== 'password_reset') {
-      throw new UnauthorizedException('Token de recuperación inválido');
-    }
-
-    const userResult = await this.databaseService.query<AuthUsuarioRow>(
-      'SELECT au.id AS auth_usuario_id, u.id AS usuario_id, au.email, u.rol, u.verificado, au.email_verificado, au.activo FROM "AT".auth_usuarios au JOIN "AT".usuarios u ON u.auth_usuario_id = au.id WHERE au.email = $1 AND au.activo = true',
-      [payload.email],
+  async validatePayload(payload: JwtPayload): Promise<CurrentUser | null> {
+    const result = await this.databaseService.query<UserRow>(
+      `SELECT
+         au.id AS auth_usuario_id,
+         u.id AS usuario_id,
+         au.email,
+         u.rol,
+         u.verificado,
+         au.email_verificado
+       FROM "AT".auth_usuarios au
+       JOIN "AT".usuarios u ON u.auth_usuario_id = au.id
+       WHERE au.id = $1
+         AND u.id = $2
+         AND au.activo = true
+       LIMIT 1`,
+      [payload.auth_usuario_id, payload.sub],
     );
 
-    if (userResult.rows.length === 0) {
-      throw new UnauthorizedException('Token de recuperación inválido');
-    }
-
-    const result = await this.databaseService.query<ChangePasswordRow>(
-      'SELECT * FROM "AT".fn_auth_reset_contrasena($1, $2)',
-      [userResult.rows[0].auth_usuario_id, dto.contrasenaNueva],
-    );
-
-    return result.rows[0];
+    return result.rows[0] ?? null;
   }
 
-  async createInvitation(dto: CreateInvitationDto) {
-    const result = await this.databaseService.query(
-      'SELECT * FROM "AT".fn_auth_crear_invitacion($1, $2, $3)',
-      [dto.email, dto.nombre ?? null, dto.payload ?? {}],
-    );
-
-    return { ok: true, data: result.rows[0] };
+  private signToken(user: CurrentUser): string {
+    return this.jwtService.sign({
+      sub: user.usuario_id,
+      auth_usuario_id: user.auth_usuario_id,
+      email: user.email,
+      rol: user.rol,
+    });
   }
 
-  private toSafeUser(usuario: AuthUsuarioRow) {
+  private publicUser(user: CurrentUser) {
     return {
-      id: usuario.usuario_id,
-      auth_usuario_id: usuario.auth_usuario_id,
-      email: usuario.email,
-      rol: usuario.rol,
-      verificado: usuario.verificado,
-      email_verificado: usuario.email_verificado,
-      activo: usuario.activo,
+      id: user.usuario_id,
+      auth_usuario_id: user.auth_usuario_id,
+      email: user.email,
+      rol: user.rol,
+      verificado: user.verificado,
+      email_verificado: user.email_verificado,
     };
   }
 
-  private getDbMessage(error: unknown) {
-    return error instanceof Error ? error.message : 'Error de base de datos';
+  private isPgError(error: unknown, code: string): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === code
+    );
+  }
+
+  private hashToken(token: string) {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
+  private async ensurePasswordResetTable() {
+    await this.databaseService.query(
+      `CREATE TABLE IF NOT EXISTS "AT".password_reset_tokens (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        auth_usuario_id uuid NOT NULL REFERENCES "AT".auth_usuarios(id) ON DELETE CASCADE,
+        token_hash text NOT NULL,
+        expira_en timestamptz NOT NULL,
+        usado_en timestamptz NULL,
+        creado_en timestamptz NOT NULL DEFAULT now()
+      )`,
+    );
+    await this.databaseService.query(
+      `CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_hash
+       ON "AT".password_reset_tokens (token_hash)`,
+    );
   }
 }

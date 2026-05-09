@@ -3,7 +3,6 @@ import {
   Controller,
   Get,
   Param,
-  Patch,
   Post,
   UploadedFile,
   UseGuards,
@@ -11,24 +10,25 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUserDecorator } from '../common/decorators/current-user.decorator';
-import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
-import { PagosService } from './pagos.service';
+import { IniciarPagoPlanDto } from '../planes/dto/iniciar-pago-plan.dto';
+import { PlanesService } from '../planes/planes.service';
 import { RegistrarPagoDto } from './dto/registrar-pago.dto';
 import { RegistrarVoucherDto } from './dto/registrar-voucher.dto';
-import { UploadVoucherDto } from './dto/upload-voucher.dto';
-import { VerificarPagoDto } from './dto/verificar-pago.dto';
+import { PagosService } from './pagos.service';
 
+@UseGuards(JwtAuthGuard)
 @Controller('pagos')
-@UseGuards(JwtAuthGuard, RolesGuard)
 export class PagosController {
-  constructor(private readonly pagosService: PagosService) {}
+  constructor(
+    private readonly pagosService: PagosService,
+    private readonly planesService: PlanesService,
+  ) {}
 
-  @Get()
-  listar(@CurrentUserDecorator() user: CurrentUser) {
-    return this.pagosService.listar(user);
+  @Get('mis-pagos')
+  misPagos(@CurrentUserDecorator() user: CurrentUser) {
+    return this.pagosService.misPagos(user);
   }
 
   @Post()
@@ -39,29 +39,35 @@ export class PagosController {
     return this.pagosService.registrar(user, dto);
   }
 
-  @Post(':id/voucher')
+  @Post(':pagoId/voucher')
   registrarVoucher(
     @CurrentUserDecorator() user: CurrentUser,
-    @Param('id') pagoId: string,
+    @Param('pagoId') pagoId: string,
     @Body() dto: RegistrarVoucherDto,
   ) {
     return this.pagosService.registrarVoucher(user, pagoId, dto);
   }
 
-  @Post(':id/voucher/upload')
+  @Post(':pagoId/voucher/archivo')
   @UseInterceptors(FileInterceptor('file'))
-  uploadVoucher(
+  subirVoucher(
     @CurrentUserDecorator() user: CurrentUser,
-    @Param('id') pagoId: string,
+    @Param('pagoId') pagoId: string,
     @UploadedFile() file: Express.Multer.File,
-    @Body() dto: UploadVoucherDto,
+    @Body('payment_method') paymentMethod?: string,
+    @Body('operation_code') operationCode?: string,
   ) {
-    return this.pagosService.uploadVoucher(user, pagoId, file, dto);
+    return this.pagosService.subirVoucher(user, pagoId, file, {
+      paymentMethod,
+      codigoOperacion: operationCode,
+    });
   }
 
-  @Patch(':id/verificar')
-  @Roles('admin')
-  verificar(@Param('id') pagoId: string, @Body() dto: VerificarPagoDto) {
-    return this.pagosService.verificar(pagoId, dto);
+  @Post('plan/iniciar')
+  iniciarPagoPlan(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Body() dto: IniciarPagoPlanDto,
+  ) {
+    return this.planesService.iniciarPago(user, dto);
   }
 }

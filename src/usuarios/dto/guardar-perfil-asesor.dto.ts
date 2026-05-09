@@ -1,44 +1,48 @@
-import { IsEmail, IsOptional, IsString, IsUUID } from 'class-validator';
+import {
+  IsEmail,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+} from 'class-validator';
 
 export class GuardarPerfilAsesorDto {
   @IsString()
-  nombreMostrar: string;
+  @MaxLength(150)
+  nombreMostrar!: string;
 
+  @IsOptional()
   @IsUUID()
-  universidadId: string;
+  universidadId?: string;
 
+  @IsOptional()
   @IsString()
-  slug: string;
+  @MaxLength(150)
+  slug?: string;
 
+  @IsOptional()
   @IsEmail()
-  emailPublico: string;
+  emailPublico?: string;
 
+  @IsOptional()
   @IsString()
-  biografia: string;
+  biografia?: string;
 
   @IsOptional()
   @IsString()
   fotoUrl?: string;
 
+  @IsOptional()
   @IsUUID()
-  especialidadId: string;
-
-  @IsString()
-  carrera: string;
-
-  @IsString()
-  nivelAcademico: string;
-
-  @IsString()
-  nombres: string;
-
-  @IsString()
-  apellidos: string;
-
-  @IsString()
-  dni: string;
+  especialidadId?: string;
 
   @IsOptional()
   @IsString()
-  telefono?: string;
+  @MaxLength(200)
+  carrera?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  nivelAcademico?: string;
 }

@@ -2,7 +2,7 @@ import { IsBoolean, IsOptional, IsString } from 'class-validator';
 
 export class VerificarPagoDto {
   @IsBoolean()
-  aprobado: boolean;
+  aprobado!: boolean;
 
   @IsOptional()
   @IsString()

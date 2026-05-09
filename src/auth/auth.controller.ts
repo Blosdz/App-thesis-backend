@@ -1,16 +1,15 @@
-import { Body, Controller, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
 import { CurrentUserDecorator } from '../common/decorators/current-user.decorator';
-import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { AuthService } from './auth.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
-import { CreateInvitationDto } from './dto/create-invitation.dto';
 import { LoginDto } from './dto/login.dto';
+import {
+  PasswordResetDto,
+  PasswordResetRequestDto,
+} from './dto/password-reset.dto';
 import { RegisterDto } from './dto/register.dto';
-import { ResetPasswordConfirmDto } from './dto/reset-password-confirm.dto';
-import { ResetPasswordRequestDto } from './dto/reset-password-request.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -26,8 +25,14 @@ export class AuthController {
     return this.authService.login(dto);
   }
 
-  @Patch('password')
   @UseGuards(JwtAuthGuard)
+  @Get('me')
+  me(@CurrentUserDecorator() user: CurrentUser) {
+    return this.authService.me(user);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('password')
   changePassword(
     @CurrentUserDecorator() user: CurrentUser,
     @Body() dto: ChangePasswordDto,
@@ -36,19 +41,12 @@ export class AuthController {
   }
 
   @Post('password/reset-request')
-  requestPasswordReset(@Body() dto: ResetPasswordRequestDto) {
+  requestPasswordReset(@Body() dto: PasswordResetRequestDto) {
     return this.authService.requestPasswordReset(dto);
   }
 
-  @Post('password/reset-confirm')
-  confirmPasswordReset(@Body() dto: ResetPasswordConfirmDto) {
-    return this.authService.confirmPasswordReset(dto);
-  }
-
-  @Post('invitations')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
-  createInvitation(@Body() dto: CreateInvitationDto) {
-    return this.authService.createInvitation(dto);
+  @Post('password/reset')
+  resetPassword(@Body() dto: PasswordResetDto) {
+    return this.authService.resetPassword(dto);
   }
 }
