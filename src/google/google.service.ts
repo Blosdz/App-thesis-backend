@@ -47,8 +47,14 @@ export class GoogleService {
       kind === 'vouchers'
         ? this.configService.get<string>('GOOGLE_DRIVE_VOUCHERS_FOLDER_ID')
         : null;
-    const fallback = this.configService.get<string>('GOOGLE_DRIVE_FOLDER_ID');
+    const fallback =
+      this.configService.get<string>('GOOGLE_DRIVE_FOLDER_ID') ||
+      this.configService.get<string>('GOOGLE_DRIVE_ROOT_FOLDER_ID');
     return specific || fallback || null;
+  }
+
+  private escapeDriveQueryValue(value: string) {
+    return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   }
 
   async getAccessToken(scope: 'drive' | 'meet' = 'drive') {
@@ -138,6 +144,50 @@ export class GoogleService {
     }
 
     return data;
+  }
+
+  async findDriveFolder({
+    folderName,
+    parentFolderId,
+    accessToken,
+  }: {
+    folderName: string;
+    parentFolderId: string;
+    accessToken: string;
+  }): Promise<DriveFolder | null> {
+    const query =
+      `'${this.escapeDriveQueryValue(parentFolderId)}' in parents and ` +
+      `mimeType = 'application/vnd.google-apps.folder' and trashed = false and ` +
+      `name = '${this.escapeDriveQueryValue(folderName)}'`;
+
+    const response = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)&pageSize=1`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      },
+    );
+
+    const data = (await response.json()) as { files?: DriveFolder[] };
+
+    if (!response.ok) {
+      throw new InternalServerErrorException(
+        `Error buscando carpeta Drive: ${JSON.stringify(data)}`,
+      );
+    }
+
+    return data.files?.[0] ?? null;
+  }
+
+  async getOrCreateDriveFolder(params: {
+    folderName: string;
+    parentFolderId: string;
+    accessToken: string;
+  }): Promise<DriveFolder> {
+    const existing = await this.findDriveFolder(params);
+    if (existing) return existing;
+    return this.createDriveFolder(params);
   }
 
   async uploadFileToDrive({

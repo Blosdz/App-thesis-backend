@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { createHash, randomUUID } from 'crypto';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { DatabaseService } from '../database/database.service';
 import { PlanesService } from '../planes/planes.service';
@@ -41,7 +42,7 @@ export class TesisService {
   async crearConPlan(user: CurrentUser, dto: CrearTesisConPlanDto) {
     this.requireStudent(user);
 
-    const tesis = await this.databaseService.withTransaction(async (client) => {
+    const result = await this.databaseService.withTransaction(async (client) => {
       const cotizacion = await this.planesService.calcularCotizacion(client, {
         planId: dto.planId,
         tipoTesisId: dto.tipoTesisId,
@@ -68,17 +69,17 @@ export class TesisService {
           dto.tipoTesisId,
           dto.planId,
           dto.programaId ?? null,
-          dto.nivelAcademico,
+          cotizacion.nivel_academico,
           dto.cantidadVariables ?? 1,
           dto.requiereAnalisisEstadistico ?? true,
           dto.esArquitecturaDiseno ?? false,
           cotizacion.precio_base,
-          cotizacion.ajuste_nivel,
-          cotizacion.total_final,
+          cotizacion.monto_ajuste_nivel,
+          cotizacion.precio_total,
           cotizacion.moneda,
           dto.requiereAnalisisEstadistico ?? true,
           cotizacion.porcentaje_nivel,
-          cotizacion.ajuste_nivel,
+          cotizacion.monto_ajuste_nivel,
           cotizacion.descuento_analisis_estadistico,
         ],
       );
@@ -94,23 +95,74 @@ export class TesisService {
           user.usuario_id,
           dto.planId,
           String(cotizacion.tipo_tesis_nombre),
-          dto.nivelAcademico,
+          cotizacion.nivel_academico,
           cotizacion.precio_base,
-          cotizacion.ajuste_nivel,
-          Number(cotizacion.precio_base) + Number(cotizacion.ajuste_nivel),
-          cotizacion.total_final,
+          cotizacion.monto_ajuste_nivel,
+          Number(cotizacion.precio_base) + Number(cotizacion.monto_ajuste_nivel),
+          cotizacion.precio_total,
           cotizacion.moneda,
           cotizacion,
         ],
       );
 
-      return { ...tesisResult.rows[0], cotizacion };
+      const codigoOperacion = this.buildPaymentCode(randomUUID());
+      const pagoResult = await client.query(
+        `INSERT INTO "AT".pagos
+           (pagador_id, concepto, monto, estado, codigo_operacion, tesis_id, metadata, nota_verificacion)
+         VALUES ($1, $2, $3, 'pendiente', $4, $5, $6, $7)
+         RETURNING *`,
+        [
+          user.usuario_id,
+          `plan:${cotizacion.plan_nombre}`,
+          cotizacion.precio_total,
+          codigoOperacion,
+          tesisResult.rows[0].id,
+          {
+            tipo: 'plan',
+            plan_id: dto.planId,
+            cotizacion,
+          },
+          'Creado automaticamente',
+        ],
+      );
+
+      await client.query(
+        `INSERT INTO "AT".pagos_plan (pago_id, plan_id)
+         VALUES ($1, $2)`,
+        [pagoResult.rows[0].id, dto.planId],
+      );
+
+      return {
+        tesis: tesisResult.rows[0],
+        cotizacion,
+        pago: pagoResult.rows[0],
+      };
     });
 
     return {
       ok: true,
       message: 'Tesis con plan creada correctamente',
-      data: tesis,
+      data: {
+        ...result.tesis,
+        tesis_id: result.tesis.id,
+        estado_tesis: result.tesis.estado,
+        pago_id: result.pago.id,
+        estado_pago: result.pago.estado,
+        codigo_operacion: result.pago.codigo_operacion,
+        monto: result.pago.monto,
+        cotizacion: result.cotizacion,
+        precio_total: result.cotizacion.precio_total,
+        moneda: result.cotizacion.moneda,
+        plan_nombre: result.cotizacion.plan_nombre,
+        tipo_tesis_codigo: result.cotizacion.tipo_tesis_codigo,
+        tipo_tesis_nombre: result.cotizacion.tipo_tesis_nombre,
+        nivel_academico: result.cotizacion.nivel_academico,
+        precio_base: result.cotizacion.precio_base,
+        porcentaje_nivel: result.cotizacion.porcentaje_nivel,
+        monto_ajuste_nivel: result.cotizacion.monto_ajuste_nivel,
+        descuento_analisis_estadistico:
+          result.cotizacion.descuento_analisis_estadistico,
+      },
     };
   }
 
@@ -132,7 +184,11 @@ export class TesisService {
     const result = await this.databaseService.query(
       `SELECT
          t.*,
-         COALESCE(
+         COALESCE(asesores_resumen.asesores, '[]'::jsonb) AS asesores
+       FROM "AT".tesis t
+       LEFT JOIN (
+         SELECT
+           at.tesis_id,
            jsonb_agg(
              jsonb_build_object(
                'asesor_id', at.asesor_id,
@@ -140,15 +196,16 @@ export class TesisService {
                'nombre_mostrar', ppa.nombre_mostrar,
                'foto_url', ppa.foto_url
              )
-           ) FILTER (WHERE at.id IS NOT NULL),
-           '[]'::jsonb
-         ) AS asesores
-       FROM "AT".tesis t
-       LEFT JOIN "AT".asesores_tesis at ON at.tesis_id = t.id AND at.activo = true
-       LEFT JOIN "AT".perfil_publico_asesor ppa ON ppa.asesor_id = at.asesor_id
+             ORDER BY at.creado_en ASC
+           ) AS asesores
+         FROM "AT".asesores_tesis at
+         LEFT JOIN "AT".perfil_publico_asesor ppa
+           ON ppa.asesor_id = at.asesor_id
+         WHERE at.activo = true
+         GROUP BY at.tesis_id
+       ) asesores_resumen ON asesores_resumen.tesis_id = t.id
        WHERE t.estudiante_id = $1
          AND t.eliminado_en IS NULL
-       GROUP BY t.id
        ORDER BY t.creado_en DESC`,
       [user.usuario_id],
     );
@@ -302,5 +359,9 @@ export class TesisService {
     if (user.rol !== 'estudiante') {
       throw new ForbiddenException('Esta operación requiere rol estudiante');
     }
+  }
+
+  private buildPaymentCode(seed: string): string {
+    return `PAY-${createHash('md5').update(seed).digest('hex').slice(0, 10)}`;
   }
 }

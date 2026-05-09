@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { createHash, randomUUID } from 'crypto';
 import { PoolClient, QueryResultRow } from 'pg';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { DatabaseService } from '../database/database.service';
@@ -13,10 +14,25 @@ interface CotizacionRow extends QueryResultRow {
   plan_id: string;
   plan_nombre: string;
   tipo_tesis_id: string;
+  tipo_tesis_codigo: string;
   tipo_tesis_nombre: string;
   precio_base: string;
   moneda: string;
-  porcentaje_nivel: string | null;
+}
+
+export interface CotizacionPlan {
+  plan_id: string;
+  plan_nombre: string;
+  tipo_tesis_id: string;
+  tipo_tesis_codigo: string;
+  tipo_tesis_nombre: string;
+  nivel_academico: string;
+  precio_base: number;
+  porcentaje_nivel: number;
+  monto_ajuste_nivel: number;
+  descuento_analisis_estadistico: number;
+  precio_total: number;
+  moneda: string;
 }
 
 @Injectable()
@@ -37,7 +53,11 @@ export class PlanesService {
     const result = await this.databaseService.query(
       `SELECT
          p.*,
-         COALESCE(
+         COALESCE(pb_resumen.beneficios, '[]'::jsonb) AS beneficios
+       FROM "AT".planes p
+       LEFT JOIN (
+         SELECT
+           pb.plan_id,
            jsonb_agg(
              jsonb_build_object(
                'codigo', b.codigo,
@@ -45,14 +65,16 @@ export class PlanesService {
                'cantidad', pb.cantidad,
                'incluido', pb.incluido
              )
-           ) FILTER (WHERE b.id IS NOT NULL),
-           '[]'::jsonb
-         ) AS beneficios
-       FROM "AT".planes p
-       LEFT JOIN "AT".planes_beneficios pb ON pb.plan_id = p.id AND pb.incluido = true
-       LEFT JOIN "AT".beneficios_plan_catalogo b ON b.id = pb.beneficio_id AND b.activo = true
+             ORDER BY b.nombre ASC
+           ) AS beneficios
+         FROM "AT".planes_beneficios pb
+         JOIN "AT".beneficios_plan_catalogo b
+           ON b.id = pb.beneficio_id
+          AND b.activo = true
+         WHERE pb.incluido = true
+         GROUP BY pb.plan_id
+       ) pb_resumen ON pb_resumen.plan_id = p.id
        WHERE p.activo = true
-       GROUP BY p.id
        ORDER BY p.precio ASC, p.nombre ASC`,
     );
     return { ok: true, data: result.rows };
@@ -81,18 +103,22 @@ export class PlanesService {
         throw new NotFoundException('Plan no encontrado');
       }
 
+      const codigoOperacion =
+        dto.codigoOperacion ?? this.buildPaymentCode(randomUUID());
+
       const pagoResult = await client.query(
         `INSERT INTO "AT".pagos
-           (pagador_id, concepto, monto, estado, codigo_operacion, tesis_id, metadata)
-         VALUES ($1, $2, $3, 'pendiente', $4, $5, $6)
+           (pagador_id, concepto, monto, estado, codigo_operacion, tesis_id, metadata, nota_verificacion)
+         VALUES ($1, $2, $3, 'pendiente', $4, $5, $6, $7)
          RETURNING *`,
         [
           user.usuario_id,
-          `Pago plan ${plan.rows[0].nombre}`,
+          `plan:${plan.rows[0].nombre}`,
           plan.rows[0].precio,
-          dto.codigoOperacion ?? null,
+          codigoOperacion,
           dto.tesisId ?? null,
           { tipo: 'plan', plan_id: dto.planId },
+          'Creado automaticamente',
         ],
       );
 
@@ -115,68 +141,113 @@ export class PlanesService {
   async calcularCotizacion(
     executor: DatabaseService | PoolClient,
     dto: CotizarTesisPlanDto,
-  ): Promise<Record<string, unknown>> {
+  ): Promise<CotizacionPlan> {
     const queryExecutor = executor as {
       query: (
         sql: string,
         params: unknown[],
       ) => Promise<{ rows: CotizacionRow[] }>;
     };
+
+    if (!dto.planId) {
+      throw new BadRequestException('El plan es obligatorio');
+    }
+
+    if (!dto.tipoTesisId) {
+      throw new BadRequestException('El tipo de tesis es obligatorio');
+    }
+
+    const nivelAcademico = this.normalizeNivelAcademico(dto.nivelAcademico);
     const result = await queryExecutor.query(
       `SELECT
          p.id AS plan_id,
          p.nombre AS plan_nombre,
          tt.id AS tipo_tesis_id,
+         tt.codigo AS tipo_tesis_codigo,
          tt.nombre AS tipo_tesis_nombre,
          ptp.precio_base,
-         ptp.moneda,
-         ana.valor AS porcentaje_nivel
+         ptp.moneda
        FROM "AT".planes_tipos_tesis_precios ptp
        JOIN "AT".planes p ON p.id = ptp.plan_id
        JOIN "AT".tipos_tesis tt ON tt.id = ptp.tipo_tesis_id
-       LEFT JOIN "AT".ajustes_nivel_academico ana
-         ON ana.nivel_academico = $3 AND ana.activo = true
        WHERE ptp.plan_id = $1
          AND ptp.tipo_tesis_id = $2
          AND ptp.activo = true
          AND p.activo = true
          AND tt.activo = true
        LIMIT 1`,
-      [dto.planId, dto.tipoTesisId, dto.nivelAcademico],
+      [dto.planId, dto.tipoTesisId],
     );
 
     const row = result.rows[0];
     if (!row) {
       throw new BadRequestException(
-        'No existe precio activo para ese plan y tipo de tesis',
+        'No existe una configuración de precio para el plan y tipo de tesis enviados',
       );
     }
 
     const precioBase = Number(row.precio_base);
-    const porcentajeNivel = Number(row.porcentaje_nivel ?? 0);
-    const ajusteNivel = Number(
+    const porcentajeNivel = this.getNivelPercentage(nivelAcademico);
+    const montoAjusteNivel = Number(
       (precioBase * (porcentajeNivel / 100)).toFixed(2),
     );
     const descuentoAnalisis =
       dto.requiereAnalisisEstadistico === false
-        ? Number((precioBase * 0.1).toFixed(2))
+        ? 500
         : 0;
-    const totalFinal = Number(
-      (precioBase + ajusteNivel - descuentoAnalisis).toFixed(2),
+    const precioTotal = Number(
+      Math.max(precioBase + montoAjusteNivel - descuentoAnalisis, 0).toFixed(2),
     );
 
     return {
       plan_id: row.plan_id,
       plan_nombre: row.plan_nombre,
       tipo_tesis_id: row.tipo_tesis_id,
+      tipo_tesis_codigo: row.tipo_tesis_codigo,
       tipo_tesis_nombre: row.tipo_tesis_nombre,
-      nivel_academico: dto.nivelAcademico,
+      nivel_academico: nivelAcademico,
       precio_base: precioBase,
       porcentaje_nivel: porcentajeNivel,
-      ajuste_nivel: ajusteNivel,
+      monto_ajuste_nivel: montoAjusteNivel,
       descuento_analisis_estadistico: descuentoAnalisis,
-      total_final: totalFinal,
-      moneda: row.moneda,
+      precio_total: precioTotal,
+      moneda: row.moneda || 'PEN',
     };
+  }
+
+  private normalizeNivelAcademico(nivelAcademico: string): string {
+    if (!nivelAcademico || nivelAcademico.trim() === '') {
+      throw new BadRequestException('El nivel académico es obligatorio');
+    }
+
+    const normalized = nivelAcademico.trim().toUpperCase();
+    if (
+      !['PREGRADO', 'MAESTRIA', 'ESPECIALIDAD', 'DOCTORADO'].includes(
+        normalized,
+      )
+    ) {
+      throw new BadRequestException(
+        'Nivel académico inválido. Debe ser PREGRADO, MAESTRIA, ESPECIALIDAD o DOCTORADO',
+      );
+    }
+
+    return normalized;
+  }
+
+  private getNivelPercentage(nivelAcademico: string): number {
+    switch (nivelAcademico) {
+      case 'MAESTRIA':
+      case 'ESPECIALIDAD':
+        return 15;
+      case 'DOCTORADO':
+        return 20;
+      case 'PREGRADO':
+      default:
+        return 0;
+    }
+  }
+
+  private buildPaymentCode(seed: string): string {
+    return `PAY-${createHash('md5').update(seed).digest('hex').slice(0, 10)}`;
   }
 }

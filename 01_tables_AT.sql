@@ -23,6 +23,10 @@ SET default_tablespace = '';
 
 SET default_table_access_method = heap;
 
+-- Prerrequisitos para el esquema y funciones usadas por el backend.
+CREATE SCHEMA IF NOT EXISTS "AT";
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 --
 -- Name: estudiante_documentos; Type: TABLE; Schema: AT; Owner: -
 --
@@ -1028,4 +1032,3 @@ CREATE VIEW "AT".vw_log_validacion_sugerencia AS
 --
 
 \unrestrict 5gJFp3D00Q4yJbB0brgAhl4cfUG6nevYxScv0hLzbbIPN0el6gruUiffS33feb3
-

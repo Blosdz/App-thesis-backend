@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -28,6 +29,8 @@ interface UserRow extends QueryResultRow, CurrentUser {}
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly jwtService: JwtService,
@@ -70,6 +73,7 @@ export class AuthService {
         usuario: this.publicUser(usuario),
       };
     } catch (error) {
+      this.logger.error('Error al registrar usuario', error);
       if (this.isPgError(error, '23505')) {
         throw new BadRequestException('El email ya está registrado');
       }

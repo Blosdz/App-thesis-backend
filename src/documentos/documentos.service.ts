@@ -75,7 +75,7 @@ export class DocumentosService {
     const thesisTitle = this.googleService.normalizeName(tesis.titulo, 'tesis');
     const folderName = `${studentName}_${thesisTitle}`.slice(0, 160);
     const accessToken = await this.googleService.getAccessToken('drive');
-    const folder = await this.googleService.createDriveFolder({
+    const folder = await this.googleService.getOrCreateDriveFolder({
       folderName,
       parentFolderId: rootFolderId,
       accessToken,

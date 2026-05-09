@@ -20,10 +20,37 @@ export class PagosService {
 
   async misPagos(user: CurrentUser) {
     const result = await this.databaseService.query(
-      `SELECT *
-       FROM "AT".pagos
-       WHERE pagador_id = $1
-       ORDER BY creado_en DESC`,
+      `SELECT
+         p.*,
+         p.id AS pago_id,
+         p.estado AS estado_pago,
+         pp.plan_id,
+         pl.nombre AS plan_nombre,
+         COALESCE(p.tesis_id, vc.tesis_id, r.tesis_id) AS tesis_id,
+         t.titulo AS tesis_titulo,
+         vc.id AS validation_cita_id,
+         COALESCE(r.estado, vc.status) AS estado_reunion,
+         COALESCE(r.inicio, vc.start_at) AS inicio_reunion,
+         COALESCE(r.fin, vc.end_at) AS fin_reunion,
+         COALESCE(r.motivo, vc.motivo, p.metadata ->> 'motivo') AS motivo,
+         COALESCE(r.modalidad, vc.modalidad, p.metadata ->> 'modalidad') AS modalidad,
+         COALESCE(r.lugar, vc.lugar, p.metadata ->> 'lugar') AS lugar,
+         COALESCE(r.enlace_reunion, vc.enlace_reunion, p.metadata ->> 'enlace_reunion') AS enlace_reunion,
+         COALESCE(r.tipo_reunion, vc.tipo_servicio, p.metadata ->> 'tipo_servicio') AS tipo_servicio,
+         COALESCE(r.asesor_id, vc.advisor_id) AS asesor_id,
+         ppa.nombre_mostrar AS asesor_nombre,
+         ppa.email_publico AS asesor_email,
+         p.metadata ->> 'origen_pago' AS origen_pago
+       FROM "AT".pagos p
+       LEFT JOIN "AT".pagos_plan pp ON pp.pago_id = p.id
+       LEFT JOIN "AT".planes pl ON pl.id = pp.plan_id
+       LEFT JOIN "AT".validation_cita vc ON vc.payment_id = p.id
+       LEFT JOIN "AT".reuniones_asesor r ON r.pago_id = p.id
+       LEFT JOIN "AT".tesis t ON t.id = COALESCE(p.tesis_id, vc.tesis_id, r.tesis_id)
+       LEFT JOIN "AT".perfil_publico_asesor ppa
+         ON ppa.asesor_id = COALESCE(r.asesor_id, vc.advisor_id)
+       WHERE p.pagador_id = $1
+       ORDER BY p.creado_en DESC`,
       [user.usuario_id],
     );
     return { ok: true, data: result.rows };
@@ -112,23 +139,7 @@ export class PagosService {
       );
     }
 
-    const perfil = await this.databaseService.query<{
-      nombres: string | null;
-      apellidos: string | null;
-    }>(
-      `SELECT nombres, apellidos
-       FROM "AT".perfil_estudiante
-       WHERE estudiante_id = $1
-       LIMIT 1`,
-      [pago.pagador_id],
-    );
-
-    const folderName = this.googleService.normalizeName(
-      perfil.rows[0]?.nombres || perfil.rows[0]?.apellidos
-        ? `${perfil.rows[0]?.nombres || ''}_${perfil.rows[0]?.apellidos || ''}`
-        : `usuario_${String(pago.pagador_id).slice(0, 8)}`,
-      'voucher',
-    );
+    const folderName = await this.buildVoucherFolderName(pago);
     const extension = file.originalname.includes('.')
       ? file.originalname.split('.').pop()
       : 'bin';
@@ -139,7 +150,7 @@ export class PagosService {
       .replace(/[:.]/g, '-')}.${extension}`;
     const accessToken = await this.googleService.getAccessToken('drive');
     const driveUser = await this.googleService.getDriveUser(accessToken);
-    const folder = await this.googleService.createDriveFolder({
+    const folder = await this.googleService.getOrCreateDriveFolder({
       folderName,
       parentFolderId: rootFolderId,
       accessToken,
@@ -276,11 +287,12 @@ export class PagosService {
     const result = await this.databaseService.query<{
       id: string;
       pagador_id: string;
+      tesis_id: string | null;
       concepto: string | null;
       codigo_operacion: string | null;
       metadata: Record<string, unknown> | null;
     }>(
-      `SELECT id, pagador_id, concepto, codigo_operacion, metadata
+      `SELECT id, pagador_id, tesis_id, concepto, codigo_operacion, metadata
        FROM "AT".pagos
        WHERE id = $1
        LIMIT 1`,
@@ -297,5 +309,47 @@ export class PagosService {
     }
 
     return pago;
+  }
+
+  private async buildVoucherFolderName(pago: {
+    pagador_id: string;
+    tesis_id: string | null;
+  }) {
+    const perfilResult = await this.databaseService.query<{
+      nombres: string | null;
+      apellidos: string | null;
+    }>(
+      `SELECT nombres, apellidos
+       FROM "AT".perfil_estudiante
+       WHERE estudiante_id = $1
+       LIMIT 1`,
+      [pago.pagador_id],
+    );
+
+    const studentName = this.googleService.normalizeName(
+      perfilResult.rows[0]?.nombres || perfilResult.rows[0]?.apellidos
+        ? `${perfilResult.rows[0]?.nombres || ''}_${perfilResult.rows[0]?.apellidos || ''}`
+        : `usuario_${String(pago.pagador_id).slice(0, 8)}`,
+      `usuario_${String(pago.pagador_id).slice(0, 8)}`,
+    );
+
+    if (!pago.tesis_id) {
+      return `${studentName}_thesis`.slice(0, 160);
+    }
+
+    const tesisResult = await this.databaseService.query<{ titulo: string | null }>(
+      `SELECT titulo
+       FROM "AT".tesis
+       WHERE id = $1
+       LIMIT 1`,
+      [pago.tesis_id],
+    );
+
+    const thesisTitle = this.googleService.normalizeName(
+      tesisResult.rows[0]?.titulo || 'thesis',
+      'thesis',
+    );
+
+    return `${studentName}_${thesisTitle}`.slice(0, 160);
   }
 }
