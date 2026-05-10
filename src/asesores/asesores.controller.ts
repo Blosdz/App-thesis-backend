@@ -16,15 +16,36 @@ import { AsesoresService } from './asesores.service';
 import { BloquesDisponiblesDto } from './dto/bloques-disponibles.dto';
 import { CambiarEstadoRelacionDto } from './dto/cambiar-estado-relacion.dto';
 import { CrearEspacioLibreDto } from './dto/crear-espacio-libre.dto';
+import { ListarAsesoresQueryDto } from './dto/listar-asesores-query.dto';
 import { VincularAsesorDto } from './dto/vincular-asesor.dto';
+import { VincularPorCodigoDto } from './dto/vincular-por-codigo.dto';
+import { VincularPorSlugDto } from './dto/vincular-por-slug.dto';
 
 @Controller('asesores')
 export class AsesoresController {
   constructor(private readonly asesoresService: AsesoresService) {}
 
   @Get()
-  obtenerAsesores() {
-    return this.asesoresService.obtenerAsesores();
+  obtenerAsesores(@Query() query: ListarAsesoresQueryDto) {
+    return this.asesoresService.listarAsesores(query);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('vincular/codigo')
+  vincularPorCodigo(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Body() dto: VincularPorCodigoDto,
+  ) {
+    return this.asesoresService.vincularPorCodigoBody(user, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('vincular/slug')
+  vincularPorSlug(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Body() dto: VincularPorSlugDto,
+  ) {
+    return this.asesoresService.vincularPorSlugBody(user, dto);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -43,6 +64,15 @@ export class AsesoresController {
   @Post('codigo-publico')
   generarCodigoPublico(@CurrentUserDecorator() user: CurrentUser) {
     return this.asesoresService.generarCodigoPublico(user);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('disponibilidad')
+  crearDisponibilidad(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Body() dto: CrearEspacioLibreDto,
+  ) {
+    return this.asesoresService.crearEspacioLibre(user, dto);
   }
 
   @UseGuards(JwtAuthGuard)

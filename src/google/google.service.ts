@@ -1,6 +1,8 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
+import { google } from 'googleapis';
+import { Readable } from 'stream';
 
 type DriveFile = {
   id: string;
@@ -13,7 +15,8 @@ type DriveFile = {
 
 type DriveFolder = {
   id: string;
-  name: string;
+  name?: string;
+  webViewLink?: string;
 };
 
 type MeetPayload = {
@@ -30,8 +33,8 @@ type MeetPayload = {
 export class GoogleService {
   constructor(private readonly configService: ConfigService) {}
 
-  normalizeName(value: string, fallback = 'archivo') {
-    const normalized = value
+  normalizeName(value: string | null | undefined, fallback = 'archivo') {
+    const normalized = String(value || fallback)
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^\w\s.-]/g, '')
@@ -42,7 +45,7 @@ export class GoogleService {
     return normalized || fallback;
   }
 
-  getDriveRootFolderId(kind: 'documents' | 'vouchers' = 'documents') {
+  getDriveRootFolderId(kind: 'documents' | 'vouchers' | 'drive' = 'documents') {
     const specific =
       kind === 'vouchers'
         ? this.configService.get<string>('GOOGLE_DRIVE_VOUCHERS_FOLDER_ID')
@@ -53,11 +56,7 @@ export class GoogleService {
     return specific || fallback || null;
   }
 
-  private escapeDriveQueryValue(value: string) {
-    return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-  }
-
-  async getAccessToken(scope: 'drive' | 'meet' = 'drive') {
+  private getOAuthClient(scope: 'drive' | 'meet' = 'drive') {
     const prefix = scope === 'meet' ? 'GOOGLE_MEET_OAUTH_' : 'GOOGLE_OAUTH_';
     const fallbackPrefix = 'GOOGLE_OAUTH_';
     const clientId =
@@ -76,114 +75,149 @@ export class GoogleService {
       );
     }
 
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: refreshToken,
-        grant_type: 'refresh_token',
-      }),
-    });
-
-    const data = (await response.json()) as { access_token?: string };
-
-    if (!response.ok || !data.access_token) {
-      throw new InternalServerErrorException(
-        `Error obteniendo access token de Google: ${JSON.stringify(data)}`,
-      );
-    }
-
-    return data.access_token;
+    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret);
+    oauth2Client.setCredentials({ refresh_token: refreshToken });
+    return oauth2Client;
   }
 
-  async getDriveUser(accessToken: string) {
-    const response = await fetch(
-      'https://www.googleapis.com/drive/v3/about?fields=user',
-      { headers: { Authorization: `Bearer ${accessToken}` } },
-    );
-    const data = await response.json();
+  private getDriveClient() {
+    return google.drive({
+      version: 'v3',
+      auth: this.getOAuthClient('drive'),
+    });
+  }
 
-    if (!response.ok) {
+  private escapeDriveQueryValue(value: string) {
+    return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  }
+
+  async getAccessToken(scope: 'drive' | 'meet' = 'drive') {
+    try {
+      const tokenResponse = await this.getOAuthClient(scope).getAccessToken();
+      const accessToken = tokenResponse.token;
+
+      if (!accessToken) {
+        throw new Error('Google no devolvió access_token');
+      }
+
+      return accessToken;
+    } catch (error) {
+      const googleError =
+        (error as { response?: { data?: unknown }; message?: string })?.response
+          ?.data ||
+        (error as { message?: string })?.message ||
+        'Error desconocido';
+
       throw new InternalServerErrorException(
-        `Error consultando usuario de Drive: ${JSON.stringify(data)}`,
+        `Error obteniendo access token de Google: ${JSON.stringify(
+          googleError,
+        )}`,
       );
     }
+  }
 
-    return data;
+  async getDriveUser() {
+    try {
+      const drive = this.getDriveClient();
+      const result = await drive.about.get({ fields: 'user' });
+      return result.data.user;
+    } catch (error) {
+      throw new InternalServerErrorException(
+        `Error consultando usuario de Drive: ${JSON.stringify(
+          (error as { response?: { data?: unknown }; message?: string })
+            ?.response?.data ||
+            (error as { message?: string })?.message ||
+            error,
+        )}`,
+      );
+    }
   }
 
   async createDriveFolder({
     folderName,
     parentFolderId,
-    accessToken,
   }: {
     folderName: string;
     parentFolderId: string;
-    accessToken: string;
   }): Promise<DriveFolder> {
-    const response = await fetch('https://www.googleapis.com/drive/v3/files', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        name: folderName,
-        mimeType: 'application/vnd.google-apps.folder',
-        parents: [parentFolderId],
-      }),
-    });
-    const data = (await response.json()) as DriveFolder;
+    try {
+      const drive = this.getDriveClient();
+      const created = await drive.files.create({
+        requestBody: {
+          name: folderName,
+          mimeType: 'application/vnd.google-apps.folder',
+          parents: [parentFolderId],
+        },
+        fields: 'id,name,webViewLink',
+      });
 
-    if (!response.ok) {
+      if (!created.data.id) {
+        throw new Error('Google Drive no devolvió ID de carpeta');
+      }
+
+      return {
+        id: created.data.id,
+        name: created.data.name ?? undefined,
+        webViewLink: created.data.webViewLink ?? undefined,
+      };
+    } catch (error) {
       throw new InternalServerErrorException(
-        `Error creando carpeta Drive: ${JSON.stringify(data)}`,
+        `Error creando carpeta Drive: ${JSON.stringify(
+          (error as { response?: { data?: unknown }; message?: string })
+            ?.response?.data ||
+            (error as { message?: string })?.message ||
+            error,
+        )}`,
       );
     }
-
-    return data;
   }
 
   async findDriveFolder({
     folderName,
     parentFolderId,
-    accessToken,
   }: {
     folderName: string;
     parentFolderId: string;
-    accessToken: string;
   }): Promise<DriveFolder | null> {
     const query =
       `'${this.escapeDriveQueryValue(parentFolderId)}' in parents and ` +
       `mimeType = 'application/vnd.google-apps.folder' and trashed = false and ` +
       `name = '${this.escapeDriveQueryValue(folderName)}'`;
 
-    const response = await fetch(
-      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)&pageSize=1`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      },
-    );
+    try {
+      const drive = this.getDriveClient();
+      const existing = await drive.files.list({
+        q: query,
+        fields: 'files(id,name,webViewLink)',
+        pageSize: 1,
+        spaces: 'drive',
+      });
+      const folder = existing.data.files?.[0];
 
-    const data = (await response.json()) as { files?: DriveFolder[] };
+      if (!folder?.id) {
+        return null;
+      }
 
-    if (!response.ok) {
+      return {
+        id: folder.id,
+        name: folder.name ?? undefined,
+        webViewLink: folder.webViewLink ?? undefined,
+      };
+    } catch (error) {
       throw new InternalServerErrorException(
-        `Error buscando carpeta Drive: ${JSON.stringify(data)}`,
+        `Error buscando carpeta Drive: ${JSON.stringify(
+          (error as { response?: { data?: unknown }; message?: string })
+            ?.response?.data ||
+            (error as { message?: string })?.message ||
+            error,
+        )}`,
       );
     }
-
-    return data.files?.[0] ?? null;
   }
 
   async getOrCreateDriveFolder(params: {
     folderName: string;
     parentFolderId: string;
-    accessToken: string;
   }): Promise<DriveFolder> {
     const existing = await this.findDriveFolder(params);
     if (existing) return existing;
@@ -193,51 +227,48 @@ export class GoogleService {
   async uploadFileToDrive({
     file,
     folderId,
-    accessToken,
     fileName,
   }: {
     file: Express.Multer.File;
     folderId: string;
-    accessToken: string;
     fileName: string;
   }): Promise<DriveFile> {
-    const boundary = `foo_bar_baz_${randomUUID()}`;
-    const delimiter = `\r\n--${boundary}\r\n`;
-    const closeDelimiter = `\r\n--${boundary}--`;
-    const preamble =
-      delimiter +
-      'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-      JSON.stringify({ name: fileName, parents: [folderId] }) +
-      delimiter +
-      `Content-Type: ${file.mimetype || 'application/octet-stream'}\r\n\r\n`;
-
-    const body = Buffer.concat([
-      Buffer.from(preamble),
-      file.buffer,
-      Buffer.from(closeDelimiter),
-    ]);
-
-    const response = await fetch(
-      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,webViewLink,webContentLink,parents',
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': `multipart/related; boundary=${boundary}`,
+    try {
+      const drive = this.getDriveClient();
+      const created = await drive.files.create({
+        requestBody: {
+          name: fileName,
+          parents: [folderId],
         },
-        body,
-      },
-    );
+        media: {
+          mimeType: file.mimetype || 'application/octet-stream',
+          body: Readable.from(file.buffer),
+        },
+        fields: 'id,name,mimeType,webViewLink,webContentLink,parents',
+      });
 
-    const data = (await response.json()) as DriveFile;
+      if (!created.data.id) {
+        throw new Error('Google Drive no devolvió ID del archivo');
+      }
 
-    if (!response.ok) {
+      return {
+        id: created.data.id,
+        name: created.data.name ?? undefined,
+        mimeType: created.data.mimeType ?? undefined,
+        webViewLink: created.data.webViewLink ?? undefined,
+        webContentLink: created.data.webContentLink ?? undefined,
+        parents: created.data.parents ?? undefined,
+      };
+    } catch (error) {
       throw new InternalServerErrorException(
-        `Error subiendo archivo a Google Drive: ${JSON.stringify(data)}`,
+        `Error subiendo archivo a Google Drive: ${JSON.stringify(
+          (error as { response?: { data?: unknown }; message?: string })
+            ?.response?.data ||
+            (error as { message?: string })?.message ||
+            error,
+        )}`,
       );
     }
-
-    return data;
   }
 
   async createMeetEvent(payload: MeetPayload) {

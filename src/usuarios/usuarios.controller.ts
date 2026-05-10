@@ -11,6 +11,19 @@ import { UsuariosService } from './usuarios.service';
 export class UsuariosController {
   constructor(private readonly usuariosService: UsuariosService) {}
 
+  @Get('perfil')
+  obtenerMiPerfil(@CurrentUserDecorator() user: CurrentUser) {
+    return this.usuariosService.obtenerMiPerfil(user);
+  }
+
+  @Put('perfil')
+  guardarMiPerfil(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Body() payload: Record<string, unknown>,
+  ) {
+    return this.usuariosService.guardarMiPerfil(user, payload);
+  }
+
   @Get('perfil/estudiante')
   obtenerPerfilEstudiante(@CurrentUserDecorator() user: CurrentUser) {
     return this.usuariosService.obtenerPerfilEstudiante(user);

@@ -20,6 +20,11 @@ export class CatalogosController {
     return this.catalogosService.universidades();
   }
 
+  @Get('especialidades')
+  especialidades() {
+    return this.catalogosService.especialidades();
+  }
+
   @Get('programas')
   programas(@Query('universidadId') universidadId?: string) {
     return this.catalogosService.programas(universidadId);

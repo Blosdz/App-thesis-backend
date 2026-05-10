@@ -148,17 +148,14 @@ export class PagosService {
     )}_${String(pago.id).slice(0, 8)}_${new Date()
       .toISOString()
       .replace(/[:.]/g, '-')}.${extension}`;
-    const accessToken = await this.googleService.getAccessToken('drive');
-    const driveUser = await this.googleService.getDriveUser(accessToken);
+    const driveUser = await this.googleService.getDriveUser();
     const folder = await this.googleService.getOrCreateDriveFolder({
       folderName,
       parentFolderId: rootFolderId,
-      accessToken,
     });
     const driveFile = await this.googleService.uploadFileToDrive({
       file,
       folderId: folder.id,
-      accessToken,
       fileName,
     });
 
@@ -305,7 +302,9 @@ export class PagosService {
     }
 
     if (pago.pagador_id !== user.usuario_id && user.rol !== 'admin') {
-      throw new ForbiddenException('No tienes permiso para modificar este pago');
+      throw new ForbiddenException(
+        'No tienes permiso para modificar este pago',
+      );
     }
 
     return pago;
@@ -337,7 +336,9 @@ export class PagosService {
       return `${studentName}_thesis`.slice(0, 160);
     }
 
-    const tesisResult = await this.databaseService.query<{ titulo: string | null }>(
+    const tesisResult = await this.databaseService.query<{
+      titulo: string | null;
+    }>(
       `SELECT titulo
        FROM "AT".tesis
        WHERE id = $1

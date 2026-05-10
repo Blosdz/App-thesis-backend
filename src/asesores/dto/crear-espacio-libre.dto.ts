@@ -7,6 +7,7 @@ import {
   Max,
   Min,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CrearEspacioLibreDto {
   @IsOptional()
@@ -25,6 +26,7 @@ export class CrearEspacioLibreDto {
 
   @IsOptional()
   @IsInt()
+  @Type(() => Number)
   @Min(1)
   duracionBloqueMinutos?: number;
 
@@ -34,6 +36,7 @@ export class CrearEspacioLibreDto {
 
   @IsOptional()
   @IsInt()
+  @Type(() => Number)
   @Min(0)
   @Max(6)
   diaSemana?: number;

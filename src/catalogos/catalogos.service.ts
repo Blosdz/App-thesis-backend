@@ -44,6 +44,15 @@ export class CatalogosService {
     return { ok: true, data: result.rows };
   }
 
+  async especialidades() {
+    const result = await this.databaseService.query(
+      `SELECT id, nombre
+       FROM "AT".especialidades
+       ORDER BY nombre ASC`,
+    );
+    return { ok: true, data: result.rows };
+  }
+
   async programas(universidadId?: string) {
     const params = universidadId ? [universidadId] : [];
     const result = await this.databaseService.query(

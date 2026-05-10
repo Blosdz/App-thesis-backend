@@ -10,12 +10,46 @@ import { GoogleService } from '../google/google.service';
 import { ActualizarRevisionDocumentoDto } from './dto/actualizar-revision-documento.dto';
 import { RegistrarDocumentoDto } from './dto/registrar-documento.dto';
 
+const TIPOS_DOCUMENTO_ESTUDIANTE = [
+  'reglamento',
+  'instrumento',
+  'rubrica',
+  'criterios',
+  'formatoAPA',
+  'Vancouver',
+  'fuente',
+] as const;
+
+const TIPO_DOCUMENTO_ALIASES: Record<string, string> = {
+  vancouver: 'Vancouver',
+};
+
 @Injectable()
 export class DocumentosService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly googleService: GoogleService,
   ) {}
+
+  private normalizarTipoDocumentoEstudiante(tipoDocumento?: string) {
+    const tipo = tipoDocumento?.trim();
+    const normalizado = tipo ? TIPO_DOCUMENTO_ALIASES[tipo] || tipo : null;
+
+    if (
+      !normalizado ||
+      !TIPOS_DOCUMENTO_ESTUDIANTE.includes(
+        normalizado as (typeof TIPOS_DOCUMENTO_ESTUDIANTE)[number],
+      )
+    ) {
+      throw new BadRequestException(
+        `tipo_documento inválido. Valores permitidos: ${TIPOS_DOCUMENTO_ESTUDIANTE.join(
+          ', ',
+        )}`,
+      );
+    }
+
+    return normalizado;
+  }
 
   async registrar(user: CurrentUser, dto: RegistrarDocumentoDto) {
     const result = await this.databaseService.query(
@@ -74,11 +108,9 @@ export class DocumentosService {
     );
     const thesisTitle = this.googleService.normalizeName(tesis.titulo, 'tesis');
     const folderName = `${studentName}_${thesisTitle}`.slice(0, 160);
-    const accessToken = await this.googleService.getAccessToken('drive');
     const folder = await this.googleService.getOrCreateDriveFolder({
       folderName,
       parentFolderId: rootFolderId,
-      accessToken,
     });
 
     await this.databaseService.query(
@@ -109,11 +141,10 @@ export class DocumentosService {
       throw new BadRequestException('Se requiere file');
     }
 
-    if (modo === 'estudiante_documento' && !tipoDocumento) {
-      throw new BadRequestException(
-        'Se requiere tipo_documento cuando modo es estudiante_documento',
-      );
-    }
+    const esDocumentoTesis = modo === 'tesis';
+    const tipoDocumentoNormalizado = esDocumentoTesis
+      ? undefined
+      : this.normalizarTipoDocumentoEstudiante(tipoDocumento);
 
     let tesis = await this.obtenerTesisAutorizada(user, tesisId);
     if (!tesis.carpeta_drive_id) {
@@ -126,24 +157,22 @@ export class DocumentosService {
     }
 
     const nextVersion =
-      modo === 'tesis' ? await this.obtenerSiguienteVersion(tesisId) : 1;
+      esDocumentoTesis ? await this.obtenerSiguienteVersion(tesisId) : 1;
     const extension = file.originalname.includes('.')
       ? file.originalname.split('.').pop()
       : 'bin';
     const safeTitle = this.googleService.normalizeName(tesis.titulo, 'tesis');
     const suffix =
-      modo === 'tesis' ? `_v${nextVersion}` : `_${tipoDocumento || 'apoyo'}`;
+      esDocumentoTesis ? `_v${nextVersion}` : `_${tipoDocumentoNormalizado}`;
     const driveFileName = `${safeTitle}${suffix}.${extension}`;
-    const accessToken = await this.googleService.getAccessToken('drive');
-    const driveUser = await this.googleService.getDriveUser(accessToken);
+    const driveUser = await this.googleService.getDriveUser();
     const driveFile = await this.googleService.uploadFileToDrive({
       file,
       folderId: tesis.carpeta_drive_id,
-      accessToken,
       fileName: driveFileName,
     });
 
-    if (modo === 'tesis') {
+    if (esDocumentoTesis) {
       const inserted = await this.databaseService.query(
         `INSERT INTO "AT".documentos_tesis
            (tesis_id, subido_por, nombre_archivo, url_archivo_drive,
@@ -174,7 +203,7 @@ export class DocumentosService {
       [
         tesisId,
         file.originalname,
-        tipoDocumento,
+        tipoDocumentoNormalizado,
         driveFile.webViewLink ?? null,
         user.usuario_id,
       ],
@@ -185,7 +214,12 @@ export class DocumentosService {
 
   async listarPorTesis(user: CurrentUser, tesisId: string) {
     const result = await this.databaseService.query(
-      `SELECT d.*
+      `SELECT
+         d.*,
+         d.nombre_archivo AS nombre,
+         d.url_archivo_drive AS url_google_doc,
+         d.creado_en AS created_at,
+         'tesis' AS tipo_documento_categoria
        FROM "AT".documentos_tesis d
        JOIN "AT".tesis t ON t.id = d.tesis_id
        WHERE d.tesis_id = $1
@@ -203,13 +237,30 @@ export class DocumentosService {
     return { ok: true, data: result.rows };
   }
 
-  async listarApoyo(tesisId: string) {
+  async listarApoyo(user: CurrentUser, tesisId: string) {
     const result = await this.databaseService.query(
-      `SELECT *
-       FROM "AT".estudiante_documentos
-       WHERE thesis_id = $1 AND activo = true
-       ORDER BY creado_en DESC`,
-      [tesisId],
+      `SELECT
+         ed.*,
+         ed.thesis_id AS tesis_id,
+         ed.nombre AS nombre_archivo,
+         ed.tipo AS tipo_documento,
+         ed.url_google_doc AS url_archivo_drive,
+         ed.creado_en AS created_at,
+         'apoyo' AS tipo_documento_categoria
+       FROM "AT".estudiante_documentos ed
+       JOIN "AT".tesis t ON t.id = ed.thesis_id
+       WHERE ed.thesis_id = $1
+         AND ed.activo = true
+         AND (
+           t.estudiante_id = $2
+           OR EXISTS (
+             SELECT 1 FROM "AT".asesores_tesis at
+             WHERE at.tesis_id = t.id AND at.asesor_id = $2 AND at.activo = true
+           )
+           OR $3 = 'admin'
+         )
+       ORDER BY ed.creado_en DESC`,
+      [tesisId, user.usuario_id, user.rol],
     );
     return { ok: true, data: result.rows };
   }

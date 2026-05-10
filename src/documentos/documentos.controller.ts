@@ -70,8 +70,11 @@ export class DocumentosController {
   }
 
   @Get('tesis/:tesisId/apoyo')
-  listarApoyo(@Param('tesisId') tesisId: string) {
-    return this.documentosService.listarApoyo(tesisId);
+  listarApoyo(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('tesisId') tesisId: string,
+  ) {
+    return this.documentosService.listarApoyo(user, tesisId);
   }
 
   @Patch(':documentoId/revision')
