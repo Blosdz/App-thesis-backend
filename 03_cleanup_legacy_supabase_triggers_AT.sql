@@ -1,15 +1,8 @@
--- Prerrequisitos del esquema principal del backend.
--- Necesario para:
--- 1. Consultar tablas bajo el esquema "AT"
--- 2. Usar crypt(...) y gen_salt(...) en auth/register y auth/login
+-- Limpia triggers heredados de Supabase que no deben ejecutarse en PostgreSQL local.
+-- El error tipico es: schema "net" does not exist al insertar en "AT".tesis.
 
-CREATE SCHEMA IF NOT EXISTS "AT";
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+BEGIN;
 
--- Limpieza de instalaciones locales antiguas:
--- este backend no depende de pg_net ni del schema "net". Si una base fue
--- creada desde Supabase, puede traer un trigger que llama net.http_post al
--- insertar tesis y rompe en PostgreSQL local.
 DO $$
 DECLARE
   trigger_name text;
@@ -34,3 +27,5 @@ BEGIN
 END $$;
 
 DROP FUNCTION IF EXISTS "AT".trigger_create_drive_folder();
+
+COMMIT;

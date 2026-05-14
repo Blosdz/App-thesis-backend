@@ -574,6 +574,20 @@ export class ReunionesService {
         throw new NotFoundException('No se encontró la reserva');
       }
 
+      if (
+        ['confirmed', 'approved'].includes(reserva.status) &&
+        reserva.meeting_id
+      ) {
+        return {
+          ok: true,
+          validation_cita_id: validationCitaId,
+          reunion_id: reserva.meeting_id,
+          pago_id: reserva.payment_id,
+          estado: reserva.status,
+          mensaje: 'La reserva ya estaba confirmada',
+        };
+      }
+
       if (reserva.status !== 'payment_pending') {
         throw new BadRequestException('La reserva no está pendiente de pago');
       }
@@ -623,34 +637,48 @@ export class ReunionesService {
     reunionId: string,
     dto: GuardarGoogleMeetDto,
   ) {
-    const result = await this.databaseService.query(
-      `UPDATE "AT".reuniones_asesor
-       SET google_event_id = $3,
-           enlace_reunion = $4,
-           meet_codigo = $5,
-           meet_error = $6,
-           meet_creado_en = CASE WHEN $4::text IS NULL THEN meet_creado_en ELSE now() END,
-           actualizado_en = now()
-       WHERE id = $1
-         AND (asesor_id = $2 OR $7 = 'admin')
-       RETURNING *`,
-      [
-        reunionId,
-        user.usuario_id,
-        dto.googleEventId ?? null,
-        dto.enlaceReunion ?? null,
-        dto.meetCodigo ?? null,
-        dto.meetError ?? null,
-        user.rol,
-      ],
-    );
-    if (!result.rows[0]) {
-      throw new NotFoundException('Reunión no encontrada');
-    }
+    const reunion = await this.databaseService.withTransaction(async (client) => {
+      const result = await client.query(
+        `UPDATE "AT".reuniones_asesor
+         SET google_event_id = $3,
+             enlace_reunion = $4,
+             meet_codigo = $5,
+             meet_error = $6,
+             meet_creado_en = CASE WHEN $4::text IS NULL THEN meet_creado_en ELSE now() END,
+             actualizado_en = now()
+         WHERE id = $1
+           AND (asesor_id = $2 OR $7 = 'admin')
+         RETURNING *`,
+        [
+          reunionId,
+          user.usuario_id,
+          dto.googleEventId ?? null,
+          dto.enlaceReunion ?? null,
+          dto.meetCodigo ?? null,
+          dto.meetError ?? null,
+          user.rol,
+        ],
+      );
+
+      if (!result.rows[0]) {
+        throw new NotFoundException('Reunión no encontrada');
+      }
+
+      await client.query(
+        `UPDATE "AT".validation_cita
+         SET enlace_reunion = COALESCE($2, enlace_reunion),
+             updated_at = now()
+         WHERE meeting_id = $1`,
+        [reunionId, dto.enlaceReunion ?? null],
+      );
+
+      return result.rows[0];
+    });
+
     return {
       ok: true,
       message: 'Google Meet guardado correctamente',
-      data: result.rows[0],
+      data: reunion,
     };
   }
 
@@ -693,7 +721,6 @@ export class ReunionesService {
       location: reunion.lugar,
       startAt: reunion.inicio,
       endAt: reunion.fin,
-      calendarId: reunion.advisor_email || reunion.advisor_public_email,
       attendees: [
         {
           email: reunion.advisor_email || reunion.advisor_public_email,

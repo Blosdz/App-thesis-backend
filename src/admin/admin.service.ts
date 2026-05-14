@@ -10,7 +10,7 @@ export class AdminService {
   async listarUsuarios() {
     const result = await this.databaseService.query(
       `SELECT
-         u.id,
+         u.id AS usuario_id,
          u.auth_usuario_id,
          au.email,
          u.rol,
@@ -19,9 +19,28 @@ export class AdminService {
          au.email_verificado,
          au.ultimo_login_en,
          u.creado_en,
-         u.actualizado_en
+         u.actualizado_en,
+         pe.nombres AS estudiante_nombres,
+         pe.apellidos AS estudiante_apellidos,
+         pe.carrera AS estudiante_carrera,
+         pe.universidad_id AS estudiante_universidad_id,
+         ue.nombre AS estudiante_universidad,
+         ppa.nombre_mostrar AS asesor_nombre_mostrar,
+         ppa.email_publico AS asesor_email_publico,
+         ppa.carrera AS asesor_carrera,
+         ppa.nivel_academico AS asesor_nivel_academico,
+         ppa.slug AS asesor_slug,
+         ppa.especialidad_id AS asesor_especialidad_id,
+         ea.nombre AS asesor_especialidad,
+         ppa.universidad_id AS asesor_universidad_id,
+         ua.nombre AS asesor_universidad
        FROM "AT".usuarios u
        JOIN "AT".auth_usuarios au ON au.id = u.auth_usuario_id
+       LEFT JOIN "AT".perfil_estudiante pe ON pe.estudiante_id = u.id
+       LEFT JOIN "AT".universidades ue ON ue.id = pe.universidad_id
+       LEFT JOIN "AT".perfil_publico_asesor ppa ON ppa.asesor_id = u.id
+       LEFT JOIN "AT".especialidades ea ON ea.id = ppa.especialidad_id
+       LEFT JOIN "AT".universidades ua ON ua.id = ppa.universidad_id
        ORDER BY u.creado_en DESC`,
     );
     return { ok: true, data: result.rows };

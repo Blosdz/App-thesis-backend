@@ -31,4 +31,17 @@ export class LeadsService {
       data: result.rows[0],
     };
   }
+
+  async conseguirUniversidades() {
+    const result = await this.databaseService.query(
+      `SELECT id, nombre, ubicacion, pais
+       FROM "AT".universidades
+       ORDER BY nombre ASC`,
+    );
+
+    return {
+      ok: true,
+      data: result.rows,
+    };
+  }
 }

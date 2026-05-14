@@ -26,7 +26,6 @@ type MeetPayload = {
   startAt: string;
   endAt: string;
   attendees?: Array<{ email: string; displayName?: string | null }>;
-  calendarId?: string | null;
 };
 
 @Injectable()
@@ -273,12 +272,8 @@ export class GoogleService {
 
   async createMeetEvent(payload: MeetPayload) {
     const accessToken = await this.getAccessToken('meet');
-    const defaultCalendarId =
+    const calendarId =
       this.configService.get<string>('GOOGLE_CALENDAR_ID') || 'primary';
-    const calendarIds =
-      payload.calendarId && payload.calendarId !== defaultCalendarId
-        ? [payload.calendarId, defaultCalendarId]
-        : [defaultCalendarId];
     const attendees = (payload.attendees || [])
       .filter((attendee) => attendee.email)
       .filter(
@@ -305,35 +300,33 @@ export class GoogleService {
 
     let lastError: unknown = null;
 
-    for (const calendarId of calendarIds) {
-      const response = await fetch(
-        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
-          calendarId,
-        )}/events?conferenceDataVersion=1&sendUpdates=${
-          attendees.length > 0 ? 'all' : 'none'
-        }`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(eventPayload),
+    const response = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+        calendarId,
+      )}/events?conferenceDataVersion=1&sendUpdates=${
+        attendees.length > 0 ? 'all' : 'none'
+      }`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
         },
-      );
-      const data = await response.json();
+        body: JSON.stringify(eventPayload),
+      },
+    );
+    const data = await response.json();
 
-      if (response.ok) {
-        return {
-          eventData: data as Record<string, unknown>,
-          calendarIdUsed: calendarId,
-          meetUrl: this.extractMeetUrl(data as Record<string, unknown>),
-          meetCode: this.extractMeetCode(data as Record<string, unknown>),
-        };
-      }
-
-      lastError = data;
+    if (response.ok) {
+      return {
+        eventData: data as Record<string, unknown>,
+        calendarIdUsed: calendarId,
+        meetUrl: this.extractMeetUrl(data as Record<string, unknown>),
+        meetCode: this.extractMeetCode(data as Record<string, unknown>),
+      };
     }
+
+    lastError = data;
 
     throw new InternalServerErrorException(
       `Error creando Google Meet: ${JSON.stringify(lastError)}`,

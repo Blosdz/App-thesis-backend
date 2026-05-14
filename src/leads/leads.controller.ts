@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Post, Get } from '@nestjs/common';
 import { RegistrarLeadDto } from './dto/registrar-lead.dto';
 import { LeadsService } from './leads.service';
 
@@ -9,5 +9,9 @@ export class LeadsController {
   @Post('estudiante')
   registrarEstudiante(@Body() dto: RegistrarLeadDto) {
     return this.leadsService.registrarEstudiante(dto);
+  }
+  @Get('universidades')
+  conseguirUniversidades() {
+    return this.leadsService.conseguirUniversidades();
   }
 }

@@ -127,6 +127,8 @@ export class UsuariosService {
 
     const perfil = await this.databaseService.withTransaction(
       async (client) => {
+        await this.ensureUniversidadExists(client, dto.universidadId);
+
         const perfilRow = await this.upsertPerfilEstudiante(client, user, dto);
         await this.upsertDatosPrivadosEstudiante(client, user, {
           dniEncriptado,
@@ -223,6 +225,8 @@ export class UsuariosService {
 
     const perfil = await this.databaseService.withTransaction(
       async (client) => {
+        await this.ensureUniversidadExists(client, dto.universidadId);
+        await this.ensureEspecialidadExists(client, dto.especialidadId);
         await this.ensureUniqueAdvisorSlug(client, user.usuario_id, slug);
 
         const perfilRow = await this.upsertPerfilPublicoAsesor(client, user, {
@@ -380,6 +384,48 @@ export class UsuariosService {
     if (existing.rows[0]) {
       throw new BadRequestException(
         'El slug público ya está en uso por otro asesor',
+      );
+    }
+  }
+
+  private async ensureUniversidadExists(
+    client: PoolClient,
+    universidadId?: string,
+  ) {
+    if (!universidadId) return;
+
+    const existing = await client.query<{ id: string }>(
+      `SELECT id
+       FROM "AT".universidades
+       WHERE id = $1
+       LIMIT 1`,
+      [universidadId],
+    );
+
+    if (!existing.rows[0]) {
+      throw new BadRequestException(
+        'La universidad seleccionada no existe en el catálogo',
+      );
+    }
+  }
+
+  private async ensureEspecialidadExists(
+    client: PoolClient,
+    especialidadId?: string,
+  ) {
+    if (!especialidadId) return;
+
+    const existing = await client.query<{ id: string }>(
+      `SELECT id
+       FROM "AT".especialidades
+       WHERE id = $1
+       LIMIT 1`,
+      [especialidadId],
+    );
+
+    if (!existing.rows[0]) {
+      throw new BadRequestException(
+        'La especialidad seleccionada no existe en el catálogo',
       );
     }
   }

@@ -82,7 +82,6 @@ export class GoogleController {
           location: item.lugar,
           startAt: item.inicio,
           endAt: item.fin,
-          calendarId: item.advisor_email || item.advisor_public_email,
           attendees: [
             {
               email: item.advisor_email || item.advisor_public_email,

@@ -183,10 +183,7 @@ export class PagosService {
 
   async adminListar() {
     const result = await this.databaseService.query(
-      `SELECT p.*, au.email AS pagador_email
-       FROM "AT".pagos p
-       LEFT JOIN "AT".usuarios u ON u.id = p.pagador_id
-       LEFT JOIN "AT".auth_usuarios au ON au.id = u.auth_usuario_id
+      `${this.adminPaymentsQuery()}
        ORDER BY p.creado_en DESC`,
     );
     return { ok: true, data: result.rows };
@@ -194,20 +191,19 @@ export class PagosService {
 
   async adminPendientesRevision() {
     const result = await this.databaseService.query(
-      `SELECT *
-       FROM "AT".pagos
-       WHERE estado IN ('pendiente', 'voucher_subido')
-       ORDER BY creado_en ASC`,
+      `${this.adminPaymentsQuery(
+        `WHERE p.estado IN ('pendiente', 'voucher_subido')`,
+      )}
+       ORDER BY p.creado_en ASC`,
     );
     return { ok: true, data: result.rows };
   }
 
   async adminObtener(pagoId: string) {
+    this.assertValidUuid(pagoId);
+
     const result = await this.databaseService.query(
-      `SELECT p.*, pp.plan_id
-       FROM "AT".pagos p
-       LEFT JOIN "AT".pagos_plan pp ON pp.pago_id = p.id
-       WHERE p.id = $1
+      `${this.adminPaymentsQuery(`WHERE p.id = $1`)}
        LIMIT 1`,
       [pagoId],
     );
@@ -221,9 +217,28 @@ export class PagosService {
     user: CurrentUser,
     pagoId: string,
     dto: VerificarPagoDto,
-    activarPlan = false,
+    _activarPlan = false,
   ) {
-    const pago = await this.databaseService.withTransaction(async (client) => {
+    this.assertValidUuid(pagoId);
+
+    const verificationResult = await this.databaseService.withTransaction(
+      async (client) => {
+      const currentPago = await client.query<{
+        id: string;
+        estado: string;
+      }>(
+        `SELECT id, estado
+         FROM "AT".pagos
+         WHERE id = $1
+         LIMIT 1
+         FOR UPDATE`,
+        [pagoId],
+      );
+
+      if (!currentPago.rows[0]) {
+        throw new NotFoundException('Pago no encontrado');
+      }
+
       const pagoResult = await client.query(
         `UPDATE "AT".pagos
          SET estado = $2,
@@ -241,46 +256,319 @@ export class PagosService {
         ],
       );
 
-      if (!pagoResult.rows[0]) {
-        throw new NotFoundException('Pago no encontrado');
-      }
+      let reunionId: string | null = null;
 
-      if (dto.aprobado && activarPlan) {
-        const planResult = await client.query<{
-          plan_id: string;
-          pagador_id: string;
-          duracion_dias: number;
-        }>(
-          `SELECT pp.plan_id, p.pagador_id, pl.duracion_dias
-           FROM "AT".pagos_plan pp
-           JOIN "AT".pagos p ON p.id = pp.pago_id
-           JOIN "AT".planes pl ON pl.id = pp.plan_id
-           WHERE pp.pago_id = $1
-           LIMIT 1`,
-          [pagoId],
-        );
+      const planResult = await client.query<{
+        plan_id: string;
+        pagador_id: string;
+        duracion_dias: number;
+        caracteristicas: Record<string, unknown> | string | null;
+      }>(
+        `SELECT pp.plan_id, p.pagador_id, pl.duracion_dias, pl.caracteristicas
+         FROM "AT".pagos_plan pp
+         JOIN "AT".pagos p ON p.id = pp.pago_id
+         JOIN "AT".planes pl ON pl.id = pp.plan_id
+         WHERE pp.pago_id = $1
+         LIMIT 1`,
+        [pagoId],
+      );
 
-        if (planResult.rows[0]) {
+      const plan = planResult.rows[0];
+
+      if (dto.aprobado && plan && currentPago.rows[0].estado !== 'validado') {
+          const asesoriasIncluidas = this.getPlanCounter(
+            plan.caracteristicas,
+            'asesorias_incluidas',
+          );
+          const presustentacionesIncluidas = this.getPlanCounter(
+            plan.caracteristicas,
+            'presustentaciones_incluidas',
+          );
+
           await client.query(
-            `INSERT INTO "AT".suscripciones_estudiante
-               (estudiante_id, plan_id, estado, expira_en)
-             VALUES ($1, $2, 'activo', now() + make_interval(days => $3))`,
+            `UPDATE "AT".suscripciones_estudiante
+             SET estado = 'cancelado',
+                 actualizado_en = now()
+             WHERE estudiante_id = $1
+               AND estado = 'activo'
+               AND plan_id <> $2`,
+            [plan.pagador_id, plan.plan_id],
+          );
+
+          const existingSuscripcion = await client.query<{ id: string }>(
+            `UPDATE "AT".suscripciones_estudiante
+             SET estado = 'activo',
+                 iniciado_en = now(),
+                 expira_en = now() + make_interval(days => $3),
+                 asesorias_incluidas = $4,
+                 asesorias_usadas = 0,
+                 presustentaciones_incluidas = $5,
+                 presustentaciones_usadas = 0,
+                 actualizado_en = now()
+             WHERE estudiante_id = $1
+               AND plan_id = $2
+             RETURNING id`,
             [
-              planResult.rows[0].pagador_id,
-              planResult.rows[0].plan_id,
-              planResult.rows[0].duracion_dias,
+              plan.pagador_id,
+              plan.plan_id,
+              plan.duracion_dias,
+              asesoriasIncluidas,
+              presustentacionesIncluidas,
             ],
           );
-        }
+
+          const suscripcion =
+            existingSuscripcion.rows[0] ??
+            (
+              await client.query<{ id: string }>(
+                `INSERT INTO "AT".suscripciones_estudiante
+                   (
+                     estudiante_id,
+                     plan_id,
+                     estado,
+                     expira_en,
+                     asesorias_incluidas,
+                     presustentaciones_incluidas
+                   )
+                 VALUES (
+                   $1,
+                   $2,
+                   'activo',
+                   now() + make_interval(days => $3),
+                   $4,
+                   $5
+                 )
+                 RETURNING id`,
+                [
+                  plan.pagador_id,
+                  plan.plan_id,
+                  plan.duracion_dias,
+                  asesoriasIncluidas,
+                  presustentacionesIncluidas,
+                ],
+              )
+            ).rows[0];
+
+          await client.query(
+            `DELETE FROM "AT".suscripcion_beneficios_consumo
+             WHERE suscripcion_id = $1`,
+            [suscripcion.id],
+          );
+
+          await client.query(
+            `INSERT INTO "AT".suscripcion_beneficios_consumo
+               (suscripcion_id, beneficio_id, cantidad_total, cantidad_usada)
+             SELECT $1, pb.beneficio_id, COALESCE(pb.cantidad, 0), 0
+             FROM "AT".planes_beneficios pb
+             JOIN "AT".beneficios_plan_catalogo b
+               ON b.id = pb.beneficio_id
+              AND b.activo = true
+             WHERE pb.plan_id = $2
+               AND pb.incluido = true
+               AND b.tipo_control = 'contador'`,
+            [suscripcion.id, plan.plan_id],
+          );
+      } else if (dto.aprobado && !plan) {
+        reunionId = await this.confirmarReservaPagada(client, pagoId);
       }
 
-      return pagoResult.rows[0];
-    });
+      return {
+        pago: pagoResult.rows[0],
+        reunionId,
+      };
+    },
+    );
 
-    return { ok: true, message: 'Pago verificado correctamente', data: pago };
+    return {
+      ok: true,
+      message: 'Pago verificado correctamente',
+      data: {
+        ...verificationResult.pago,
+        reunion_id: verificationResult.reunionId,
+      },
+      reunion_id: verificationResult.reunionId,
+    };
+  }
+
+  private async confirmarReservaPagada(
+    client: {
+      query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }>;
+    },
+    pagoId: string,
+  ) {
+    const reservaResult = await client.query(
+      `SELECT
+         vc.*,
+         p.monto
+       FROM "AT".validation_cita vc
+       JOIN "AT".pagos p ON p.id = vc.payment_id
+       WHERE vc.payment_id = $1
+       LIMIT 1
+       FOR UPDATE OF vc`,
+      [pagoId],
+    );
+    const reserva = reservaResult.rows[0];
+
+    if (!reserva) {
+      return null;
+    }
+
+    if (reserva.meeting_id) {
+      await client.query(
+        `UPDATE "AT".validation_cita
+         SET status = 'confirmed',
+             updated_at = now()
+         WHERE id = $1`,
+        [reserva.id],
+      );
+
+      return reserva.meeting_id as string;
+    }
+
+    const reunion = await client.query(
+      `INSERT INTO "AT".reuniones_asesor
+         (disponibilidad_id, asesor_id, estudiante_id, tesis_id, tarifa_id,
+          estado, pago_id, motivo, notas, modalidad, lugar, enlace_reunion,
+          inicio, fin, duracion_minutos, costo_reunion, moneda,
+          origen_servicio, suscripcion_id, consume_cupo_plan, cubierta_por_plan,
+          tipo_reunion)
+       VALUES ($1, $2, $3, $4, null,
+          'confirmado', $5, $6, $7, $8, $9, $10,
+          $11, $12, $13, $14, 'PEN',
+          'pago', null, false, false, $15)
+       RETURNING id`,
+      [
+        reserva.disponibilidad_id,
+        reserva.advisor_id,
+        reserva.user_id,
+        reserva.tesis_id ?? null,
+        pagoId,
+        reserva.motivo ?? null,
+        reserva.notas ?? null,
+        reserva.modalidad ?? 'virtual',
+        reserva.lugar ?? null,
+        reserva.enlace_reunion ?? null,
+        reserva.start_at,
+        reserva.end_at,
+        reserva.duration_minutes,
+        reserva.monto ?? 0,
+        reserva.tipo_servicio ?? 'asesoria',
+      ],
+    );
+
+    await client.query(
+      `UPDATE "AT".validation_cita
+       SET status = 'confirmed',
+           meeting_id = $2,
+           updated_at = now()
+       WHERE id = $1`,
+      [reserva.id, reunion.rows[0].id],
+    );
+
+    await client.query(
+      `UPDATE "AT".disponibilidad_asesor
+       SET disponible = false,
+           actualizado_en = now()
+       WHERE id = $1`,
+      [reserva.disponibilidad_id],
+    );
+
+    return reunion.rows[0].id;
+  }
+
+  private adminPaymentsQuery(whereClause = '') {
+    return `SELECT
+         p.*,
+         p.id AS pago_id,
+         p.estado AS estado_pago,
+         pp.plan_id,
+         pl.nombre AS plan_nombre,
+         pu.rol AS pagador_rol,
+         pau.email AS pagador_email,
+         CASE
+           WHEN pu.rol = 'estudiante' THEN NULLIF(trim(coalesce(pe.nombres, '') || ' ' || coalesce(pe.apellidos, '')), '')
+           WHEN pu.rol = 'asesor' THEN ppa_pagador.nombre_mostrar
+           WHEN pu.rol = 'admin' THEN 'Administrador'
+           ELSE NULL
+         END AS pagador_nombre,
+         pe.nombres AS estudiante_nombres,
+         pe.apellidos AS estudiante_apellidos,
+         pe.carrera AS estudiante_carrera,
+         COALESCE(p.tesis_id, vc.tesis_id, rp.tesis_id, rvc.tesis_id) AS tesis_id,
+         t.titulo AS tesis_titulo,
+         vc.id AS validation_cita_id,
+         COALESCE(rp.id, rvc.id, vc.meeting_id) AS reunion_id,
+         COALESCE(rp.estado, rvc.estado, vc.status) AS estado_reunion,
+         COALESCE(rp.inicio, rvc.inicio, vc.start_at) AS inicio_reunion,
+         COALESCE(rp.inicio, rvc.inicio, vc.start_at) AS inicio,
+         COALESCE(rp.fin, rvc.fin, vc.end_at) AS fin_reunion,
+         COALESCE(rp.fin, rvc.fin, vc.end_at) AS fin,
+         COALESCE(rp.motivo, rvc.motivo, vc.motivo, p.metadata ->> 'motivo') AS motivo,
+         COALESCE(rp.modalidad, rvc.modalidad, vc.modalidad, p.metadata ->> 'modalidad') AS modalidad,
+         COALESCE(rp.lugar, rvc.lugar, vc.lugar, p.metadata ->> 'lugar') AS lugar,
+         COALESCE(rp.enlace_reunion, rvc.enlace_reunion, vc.enlace_reunion, p.metadata ->> 'enlace_reunion') AS enlace_reunion,
+         COALESCE(rp.tipo_reunion, rvc.tipo_reunion, vc.tipo_servicio, p.metadata ->> 'tipo_servicio') AS tipo_servicio,
+         COALESCE(rp.asesor_id, rvc.asesor_id, vc.advisor_id, pa.asesor_id) AS asesor_id,
+         ppa.nombre_mostrar AS asesor_nombre,
+         ppa.email_publico AS asesor_email,
+         ppa.email_publico AS asesor_email_publico,
+         v.id AS verificado_por_usuario_id,
+         CASE
+           WHEN vu.rol = 'estudiante' THEN NULLIF(trim(coalesce(vpe.nombres, '') || ' ' || coalesce(vpe.apellidos, '')), '')
+           WHEN vu.rol = 'asesor' THEN vppa.nombre_mostrar
+           WHEN vu.rol = 'admin' THEN 'Administrador'
+           ELSE NULL
+         END AS verificado_por_nombre,
+         p.metadata ->> 'origen_pago' AS origen_pago
+       FROM "AT".pagos p
+       LEFT JOIN "AT".pagos_plan pp ON pp.pago_id = p.id
+       LEFT JOIN "AT".planes pl ON pl.id = pp.plan_id
+       LEFT JOIN "AT".pagos_asesor pa ON pa.pago_id = p.id
+       LEFT JOIN "AT".validation_cita vc ON vc.payment_id = p.id
+       LEFT JOIN "AT".reuniones_asesor rp ON rp.pago_id = p.id
+       LEFT JOIN "AT".reuniones_asesor rvc ON rvc.id = vc.meeting_id
+       LEFT JOIN "AT".tesis t ON t.id = COALESCE(p.tesis_id, vc.tesis_id, rp.tesis_id, rvc.tesis_id)
+       LEFT JOIN "AT".usuarios pu ON pu.id = p.pagador_id
+       LEFT JOIN "AT".auth_usuarios pau ON pau.id = pu.auth_usuario_id
+       LEFT JOIN "AT".perfil_estudiante pe ON pe.estudiante_id = pu.id
+       LEFT JOIN "AT".perfil_publico_asesor ppa_pagador ON ppa_pagador.asesor_id = pu.id
+       LEFT JOIN "AT".perfil_publico_asesor ppa
+         ON ppa.asesor_id = COALESCE(rp.asesor_id, rvc.asesor_id, vc.advisor_id, pa.asesor_id)
+       LEFT JOIN "AT".usuarios v ON v.id = p.verificado_por
+       LEFT JOIN "AT".usuarios vu ON vu.id = v.id
+       LEFT JOIN "AT".perfil_estudiante vpe ON vpe.estudiante_id = vu.id
+       LEFT JOIN "AT".perfil_publico_asesor vppa ON vppa.asesor_id = vu.id
+       ${whereClause}`;
+  }
+
+  private getPlanCounter(
+    caracteristicas: Record<string, unknown> | string | null,
+    key: string,
+  ) {
+    const parsed =
+      typeof caracteristicas === 'string'
+        ? this.parsePlanCharacteristics(caracteristicas)
+        : caracteristicas;
+    const value = Number(parsed?.[key] ?? 0);
+
+    if (!Number.isFinite(value) || value < 0) {
+      return 0;
+    }
+
+    return Math.trunc(value);
+  }
+
+  private parsePlanCharacteristics(value: string) {
+    try {
+      return JSON.parse(value) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
   }
 
   private async assertPagoOwner(user: CurrentUser, pagoId: string) {
+    this.assertValidUuid(pagoId);
+
     const result = await this.databaseService.query<{
       id: string;
       pagador_id: string;
@@ -308,6 +596,18 @@ export class PagosService {
     }
 
     return pago;
+  }
+
+  private assertValidUuid(value: string) {
+    const isUuid =
+      typeof value === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        value,
+      );
+
+    if (!isUuid) {
+      throw new BadRequestException('ID de pago inválido');
+    }
   }
 
   private async buildVoucherFolderName(pago: {

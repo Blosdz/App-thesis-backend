@@ -61,6 +61,18 @@ export class AsesoresController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Get('estudiantes/:estudianteId')
+  obtenerDetalleEstudianteAsesor(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('estudianteId') estudianteId: string,
+  ) {
+    return this.asesoresService.obtenerDetalleEstudianteAsesor(
+      user,
+      estudianteId,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post('codigo-publico')
   generarCodigoPublico(@CurrentUserDecorator() user: CurrentUser) {
     return this.asesoresService.generarCodigoPublico(user);

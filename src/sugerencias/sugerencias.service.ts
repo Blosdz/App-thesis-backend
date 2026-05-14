@@ -42,9 +42,16 @@ export class SugerenciasService {
 
   async listarPorTesis(tesisId: string) {
     const result = await this.databaseService.query(
-      `SELECT h.*, ts.nombre AS tipo_sugerencia_nombre
+      `SELECT 
+         h.*,
+         ts.nombre AS tipo_sugerencia_nombre,
+         v.estado AS estado_validacion,
+         v.comentario_estudiante,
+         v.comentario_asesor,
+         v.marcado_aplicado
        FROM "AT".historial_sugerencias_asesor h
        LEFT JOIN "AT".tipos_sugerencia_asesor ts ON ts.id = h.tipo_sugerencia_id
+       LEFT JOIN "AT".validaciones_sugerencia_asesor v ON v.historial_sugerencia_id = h.id
        WHERE h.tesis_id = $1
        ORDER BY h.creado_en DESC`,
       [tesisId],
@@ -67,7 +74,8 @@ export class SugerenciasService {
     sugerenciaId: string,
     dto: MarcarSugerenciaDto,
   ) {
-    const result = await this.databaseService.query(
+    // Primero actualizar historial_sugerencias_asesor
+    const historialResult = await this.databaseService.query(
       `UPDATE "AT".historial_sugerencias_asesor h
        SET aplicado_por_estudiante = $3,
            aplicado = $3,
@@ -81,13 +89,28 @@ export class SugerenciasService {
        RETURNING h.*`,
       [sugerenciaId, user.usuario_id, dto.aplicado, user.rol],
     );
-    if (!result.rows[0]) {
+
+    if (!historialResult.rows[0]) {
       throw new NotFoundException('Sugerencia no encontrada');
     }
+
+    // Ahora actualizar validaciones_sugerencia_asesor
+    await this.databaseService.query(
+      `UPDATE "AT".validaciones_sugerencia_asesor v
+       SET 
+         estado = CASE WHEN $2 THEN 'marcado_por_estudiante' ELSE 'pendiente' END,
+         comentario_estudiante = $3,
+         marcado_aplicado = $2,
+         marcado_en = CASE WHEN $2 THEN now() ELSE NULL END,
+         actualizado_en = now()
+       WHERE historial_sugerencia_id = $1`,
+      [sugerenciaId, dto.aplicado, dto.comentario ?? null],
+    );
+
     return {
       ok: true,
       message: 'Sugerencia actualizada correctamente',
-      data: result.rows[0],
+      data: historialResult.rows[0],
     };
   }
 

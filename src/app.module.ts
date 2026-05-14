@@ -19,6 +19,7 @@ import { GoogleModule } from './google/google.module';
 import { AdminModule } from './admin/admin.module';
 import { SugerenciasModule } from './sugerencias/sugerencias.module';
 import { ObservacionesModule } from './observaciones/observaciones.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { ObservacionesModule } from './observaciones/observaciones.module';
     AdminModule,
     SugerenciasModule,
     ObservacionesModule,
+    DashboardModule,
   ],
   controllers: [AppController],
   providers: [AppService],

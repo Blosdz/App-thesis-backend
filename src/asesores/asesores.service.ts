@@ -15,6 +15,10 @@ import { VincularAsesorDto } from './dto/vincular-asesor.dto';
 import { VincularPorCodigoDto } from './dto/vincular-por-codigo.dto';
 import { VincularPorSlugDto } from './dto/vincular-por-slug.dto';
 
+type Queryable = {
+  query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }>;
+};
+
 @Injectable()
 export class AsesoresService {
   constructor(private readonly databaseService: DatabaseService) {}
@@ -134,21 +138,31 @@ export class AsesoresService {
       throw new ForbiddenException('Esta operación requiere rol asesor');
     }
     const result = await this.databaseService.query(
-      `SELECT
-         r.*,
-         pe.nombres,
-         pe.apellidos,
-         pe.carrera,
-         uni.nombre AS universidad_nombre
-       FROM "AT".relaciones_asesor_estudiante r
-       JOIN "AT".usuarios u ON u.id = r.estudiante_id
-       LEFT JOIN "AT".perfil_estudiante pe ON pe.estudiante_id = r.estudiante_id
-       LEFT JOIN "AT".universidades uni ON uni.id = pe.universidad_id
-       WHERE r.asesor_id = $1
-       ORDER BY r.creado_en DESC`,
+      this.buildEstudianteAsesorSql(''),
       [user.usuario_id],
     );
     return { ok: true, data: result.rows };
+  }
+
+  async obtenerDetalleEstudianteAsesor(
+    user: CurrentUser,
+    estudianteId: string,
+  ) {
+    if (user.rol !== 'asesor') {
+      throw new ForbiddenException('Esta operación requiere rol asesor');
+    }
+
+    const row = await this.obtenerDetalleEstudianteAsesorRow(
+      this.databaseService,
+      user.usuario_id,
+      estudianteId,
+    );
+
+    if (!row) {
+      throw new NotFoundException('Estudiante no encontrado');
+    }
+
+    return { ok: true, data: row };
   }
 
   async obtenerPerfilPublico(valor: string) {
@@ -219,6 +233,14 @@ export class AsesoresService {
     relacionId: string,
     dto: CambiarEstadoRelacionDto,
   ) {
+    if (user.rol === 'asesor' && dto.estado === 'activo') {
+      return this.aceptarRelacionAsesor(user, relacionId);
+    }
+
+    if (user.rol === 'asesor' && dto.estado === 'cancelado') {
+      return this.negarRelacionAsesor(user, relacionId);
+    }
+
     const result = await this.databaseService.query(
       `UPDATE "AT".relaciones_asesor_estudiante
        SET estado = $3, actualizado_en = now()
@@ -640,6 +662,248 @@ export class AsesoresService {
       estado: relacion.estado,
       data: relacion,
     };
+  }
+
+  private async aceptarRelacionAsesor(user: CurrentUser, relacionId: string) {
+    const detail = await this.databaseService.withTransaction(
+      async (client) => {
+        const relacionResult = await client.query(
+          `SELECT *
+           FROM "AT".relaciones_asesor_estudiante
+           WHERE id = $1 AND asesor_id = $2
+           LIMIT 1`,
+          [relacionId, user.usuario_id],
+        );
+        const relacion = relacionResult.rows[0];
+
+        if (!relacion) {
+          throw new NotFoundException('Relación no encontrada');
+        }
+
+        const tesisResult = await client.query(
+          this.buildTesisActivaSql('WHERE t.estudiante_id = $1'),
+          [relacion.estudiante_id],
+        );
+        const tesis = tesisResult.rows[0];
+
+        if (!tesis) {
+          throw new BadRequestException(
+            'El estudiante no tiene una tesis activa para vincular',
+          );
+        }
+
+        await client.query(
+          `UPDATE "AT".relaciones_asesor_estudiante
+           SET estado = 'activo', actualizado_en = now()
+           WHERE id = $1`,
+          [relacionId],
+        );
+
+        const existing = await client.query(
+          `SELECT *
+           FROM "AT".asesores_tesis
+           WHERE asesor_id = $1
+             AND tesis_id = $2
+           ORDER BY activo DESC, creado_en DESC
+           LIMIT 1`,
+          [user.usuario_id, tesis.id],
+        );
+
+        if (existing.rows[0]) {
+          await client.query(
+            `UPDATE "AT".asesores_tesis
+             SET activo = true,
+                 rol = COALESCE(rol, 'principal'),
+                 relacion_id = $3
+             WHERE id = $1 AND asesor_id = $2`,
+            [existing.rows[0].id, user.usuario_id, relacionId],
+          );
+        } else {
+          await client.query(
+            `INSERT INTO "AT".asesores_tesis
+               (asesor_id, tesis_id, activo, rol, relacion_id)
+             VALUES ($1, $2, true, 'principal', $3)`,
+            [user.usuario_id, tesis.id, relacionId],
+          );
+        }
+
+        return this.obtenerDetalleEstudianteAsesorRow(
+          client,
+          user.usuario_id,
+          relacion.estudiante_id,
+        );
+      },
+    );
+
+    return {
+      ok: true,
+      message: 'Estudiante aceptado y vinculado a la tesis correctamente',
+      data: detail,
+    };
+  }
+
+  private async negarRelacionAsesor(user: CurrentUser, relacionId: string) {
+    const deleted = await this.databaseService.withTransaction(
+      async (client) => {
+        const relacionResult = await client.query(
+          `SELECT *
+           FROM "AT".relaciones_asesor_estudiante
+           WHERE id = $1 AND asesor_id = $2
+           LIMIT 1`,
+          [relacionId, user.usuario_id],
+        );
+        const relacion = relacionResult.rows[0];
+
+        if (!relacion) {
+          throw new NotFoundException('Relación no encontrada');
+        }
+
+        await client.query(
+          `DELETE FROM "AT".asesores_tesis
+           WHERE relacion_id = $1 AND asesor_id = $2`,
+          [relacionId, user.usuario_id],
+        );
+
+        await client.query(
+          `DELETE FROM "AT".relaciones_asesor_estudiante
+           WHERE id = $1 AND asesor_id = $2`,
+          [relacionId, user.usuario_id],
+        );
+
+        return {
+          ...relacion,
+          estado: 'cancelado',
+          r_estado_relacion: 'cancelado',
+          r_relacion_eliminada: true,
+        };
+      },
+    );
+
+    return {
+      ok: true,
+      message: 'Solicitud rechazada y vínculo eliminado correctamente',
+      data: deleted,
+    };
+  }
+
+  private buildTesisActivaSql(whereClause: string) {
+    return `SELECT
+              t.*,
+              tt.nombre AS tipo_tesis_nombre,
+              p.nombre AS plan_nombre
+            FROM "AT".tesis t
+            LEFT JOIN "AT".tipos_tesis tt ON tt.id = t.tipo_tesis_id
+            LEFT JOIN "AT".planes p ON p.id = t.plan_id
+            ${whereClause}
+              AND t.eliminado_en IS NULL
+              AND t.estado <> 'cancelado'
+            ORDER BY
+              CASE t.estado
+                WHEN 'en_progreso' THEN 1
+                WHEN 'revision' THEN 2
+                WHEN 'pendiente_pago' THEN 3
+                WHEN 'borrador' THEN 4
+                WHEN 'completado' THEN 5
+                ELSE 6
+              END,
+              t.actualizado_en DESC NULLS LAST,
+              t.creado_en DESC
+            LIMIT 1`;
+  }
+
+  private buildEstudianteAsesorSql(extraWhere: string) {
+    return `SELECT
+              r.id,
+              r.asesor_id,
+              r.estudiante_id,
+              r.codigo_publico_id,
+              r.estado,
+              r.creado_en,
+              r.actualizado_en,
+              r.id AS relacion_id,
+              r.id AS r_relacion_id,
+              r.asesor_id AS r_asesor_id,
+              r.estudiante_id AS r_estudiante_id,
+              r.codigo_publico_id AS r_codigo_publico_id,
+              r.estado AS r_estado_relacion,
+              r.creado_en AS r_creado_en,
+              r.actualizado_en AS r_actualizado_en,
+              pe.nombres,
+              pe.nombres AS r_nombres,
+              pe.apellidos,
+              pe.apellidos AS r_apellidos,
+              pe.carrera,
+              pe.carrera AS r_carrera,
+              pe.universidad_id,
+              pe.universidad_id AS r_universidad_id,
+              uni.nombre AS universidad_nombre,
+              uni.nombre AS r_universidad_nombre,
+              au.email,
+              au.email AS r_email,
+              tesis.id AS tesis_id,
+              tesis.id AS r_tesis_id,
+              tesis.titulo AS tesis_titulo,
+              tesis.titulo AS r_tesis_titulo,
+              tesis.descripcion AS tesis_descripcion,
+              tesis.descripcion AS r_tesis_descripcion,
+              tesis.estado AS tesis_estado,
+              tesis.estado AS r_tesis_estado,
+              tesis.nivel_academico AS tesis_nivel_academico,
+              tesis.nivel_academico AS r_tesis_nivel_academico,
+              tesis.tipo_tesis_nombre AS r_tipo_tesis_nombre,
+              tesis.plan_nombre AS r_plan_nombre,
+              ast.id AS asesor_tesis_id,
+              ast.id AS r_asesor_tesis_id,
+              COALESCE(ast.activo, false) AS asesor_tesis_activo,
+              COALESCE(ast.activo, false) AS r_asesor_tesis_activo,
+              ast.rol AS asesor_tesis_rol,
+              ast.rol AS r_asesor_tesis_rol,
+              reunion.inicio AS reunion_inicio,
+              reunion.inicio AS r_reunion_inicio,
+              reunion.estado AS reunion_estado,
+              reunion.estado AS r_reunion_estado
+            FROM "AT".relaciones_asesor_estudiante r
+            JOIN "AT".usuarios u ON u.id = r.estudiante_id
+            LEFT JOIN "AT".auth_usuarios au ON au.id = u.auth_usuario_id
+            LEFT JOIN "AT".perfil_estudiante pe ON pe.estudiante_id = r.estudiante_id
+            LEFT JOIN "AT".universidades uni ON uni.id = pe.universidad_id
+            LEFT JOIN LATERAL (
+              ${this.buildTesisActivaSql('WHERE t.estudiante_id = r.estudiante_id')}
+            ) tesis ON true
+            LEFT JOIN LATERAL (
+              SELECT id, activo, rol
+              FROM "AT".asesores_tesis
+              WHERE asesor_id = r.asesor_id
+                AND tesis_id = tesis.id
+                AND relacion_id = r.id
+              ORDER BY activo DESC, creado_en DESC
+              LIMIT 1
+            ) ast ON true
+            LEFT JOIN LATERAL (
+              SELECT inicio, estado
+              FROM "AT".reuniones_asesor
+              WHERE asesor_id = r.asesor_id
+                AND estudiante_id = r.estudiante_id
+                AND estado <> 'cancelado'
+              ORDER BY inicio DESC
+              LIMIT 1
+            ) reunion ON true
+            WHERE r.asesor_id = $1
+            ${extraWhere}
+            ORDER BY r.creado_en DESC`;
+  }
+
+  private async obtenerDetalleEstudianteAsesorRow(
+    queryable: Queryable,
+    asesorId: string,
+    estudianteId: string,
+  ) {
+    const result = await queryable.query(
+      this.buildEstudianteAsesorSql('AND r.estudiante_id = $2'),
+      [asesorId, estudianteId],
+    );
+
+    return result.rows[0] ?? null;
   }
 
   private requireStudent(user: CurrentUser) {
