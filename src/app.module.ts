@@ -20,6 +20,9 @@ import { AdminModule } from './admin/admin.module';
 import { SugerenciasModule } from './sugerencias/sugerencias.module';
 import { ObservacionesModule } from './observaciones/observaciones.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { DeepseekModule } from './deepseek/deepseek.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { CursosModule } from './cursos/cursos.module';
 
 @Module({
   imports: [
@@ -42,6 +45,9 @@ import { DashboardModule } from './dashboard/dashboard.module';
     SugerenciasModule,
     ObservacionesModule,
     DashboardModule,
+    DeepseekModule,
+    NotificationsModule,
+    CursosModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -6,6 +6,7 @@ import {
 import { createHash, randomUUID } from 'crypto';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { DatabaseService } from '../database/database.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PlanesService } from '../planes/planes.service';
 import { ActualizarEstadoTesisDto } from './dto/actualizar-estado-tesis.dto';
 import { AsignarAsesorDto } from './dto/asignar-asesor.dto';
@@ -16,6 +17,7 @@ export class TesisService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly planesService: PlanesService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async crear(user: CurrentUser, dto: CrearTesisDto) {
@@ -132,6 +134,18 @@ export class TesisService {
         [pagoResult.rows[0].id, dto.planId],
       );
 
+      await this.notificationsService.create(
+        {
+          userId: user.usuario_id,
+          title: 'Pago generado',
+          description: `Se generó un pago pendiente para la tesis "${tesisResult.rows[0].titulo}".`,
+          type: 'pago_generado',
+          relatedId: pagoResult.rows[0].id,
+          path: '/student/payments',
+        },
+        client,
+      );
+
       return {
         tesis: tesisResult.rows[0],
         cotizacion,
@@ -217,7 +231,16 @@ export class TesisService {
       throw new ForbiddenException('Esta operación requiere rol asesor');
     }
     const result = await this.databaseService.query(
-      `SELECT t.*, pe.nombres, pe.apellidos, at.rol AS rol_asesor
+      `SELECT
+         t.*,
+         t.id AS tesis_id,
+         pe.nombres,
+         pe.nombres AS estudiante_nombres,
+         pe.apellidos,
+         pe.apellidos AS estudiante_apellidos,
+         pe.carrera AS estudiante_carrera,
+         at.rol AS rol_asesor,
+         at.id AS asesor_tesis_id
        FROM "AT".asesores_tesis at
        JOIN "AT".tesis t ON t.id = at.tesis_id
        LEFT JOIN "AT".perfil_estudiante pe ON pe.estudiante_id = t.estudiante_id

@@ -19,6 +19,13 @@ type DriveFolder = {
   webViewLink?: string;
 };
 
+type DrivePermission = {
+  id?: string | null;
+  type?: string | null;
+  role?: string | null;
+  emailAddress?: string | null;
+};
+
 type MeetPayload = {
   summary: string;
   description?: string | null;
@@ -270,6 +277,148 @@ export class GoogleService {
     }
   }
 
+  async restrictDriveItemToEmails({
+    fileId,
+    readerEmails,
+    writerEmails = [],
+  }: {
+    fileId: string;
+    readerEmails: string[];
+    writerEmails?: string[];
+  }) {
+    if (!fileId) return null;
+
+    const readers = this.normalizeEmailList(readerEmails);
+    const writers = this.normalizeEmailList(writerEmails);
+    const allowedEmails = new Set([...readers, ...writers]);
+
+    try {
+      const drive = this.getDriveClient();
+      const permissions = await drive.permissions.list({
+        fileId,
+        fields: 'permissions(id,type,role,emailAddress)',
+        supportsAllDrives: true,
+      });
+
+      const currentPermissions =
+        (permissions.data.permissions || []) as DrivePermission[];
+      const retainedPermissions: DrivePermission[] = [];
+
+      for (const permission of currentPermissions) {
+        if (!permission.id || permission.role === 'owner') {
+          retainedPermissions.push(permission);
+          continue;
+        }
+
+        const permissionEmail = permission.emailAddress?.toLowerCase();
+        const shouldRemove =
+          permission.type === 'anyone' ||
+          permission.type === 'domain' ||
+          (permission.type === 'user' &&
+            permissionEmail &&
+            !allowedEmails.has(permissionEmail));
+
+        if (!shouldRemove) {
+          retainedPermissions.push(permission);
+          continue;
+        }
+
+        await drive.permissions.delete({
+          fileId,
+          permissionId: permission.id,
+          supportsAllDrives: true,
+        });
+      }
+
+      for (const email of writers) {
+        await this.ensureDriveUserPermission(
+          fileId,
+          email,
+          'writer',
+          retainedPermissions,
+        );
+      }
+
+      for (const email of readers) {
+        if (writers.includes(email)) continue;
+        await this.ensureDriveUserPermission(
+          fileId,
+          email,
+          'reader',
+          retainedPermissions,
+        );
+      }
+
+      return { ok: true, fileId, readers, writers };
+    } catch (error) {
+      throw new InternalServerErrorException(
+        `Error configurando permisos Drive: ${JSON.stringify(
+          (error as { response?: { data?: unknown }; message?: string })
+            ?.response?.data ||
+            (error as { message?: string })?.message ||
+            error,
+        )}`,
+      );
+    }
+  }
+
+  private async ensureDriveUserPermission(
+    fileId: string,
+    emailAddress: string,
+    role: 'reader' | 'writer',
+    permissions: DrivePermission[],
+  ) {
+    const drive = this.getDriveClient();
+    const existingPermission = permissions.find(
+      (permission) =>
+        permission.type === 'user' &&
+        permission.emailAddress?.toLowerCase() === emailAddress,
+    );
+
+    if (existingPermission?.id) {
+      if (
+        existingPermission.role === role ||
+        existingPermission.role === 'owner' ||
+        (existingPermission.role === 'writer' && role === 'reader')
+      ) {
+        return;
+      }
+
+      await drive.permissions.update({
+        fileId,
+        permissionId: existingPermission.id,
+        requestBody: {
+          role,
+        },
+        fields: 'id',
+        supportsAllDrives: true,
+      });
+      return;
+    }
+
+    await drive.permissions.create({
+      fileId,
+      requestBody: {
+        type: 'user',
+        role,
+        emailAddress,
+      },
+      fields: 'id',
+      sendNotificationEmail: false,
+      supportsAllDrives: true,
+    });
+  }
+
+  private normalizeEmailList(emails: string[]) {
+    return [
+      ...new Set(
+        emails
+          .map((email) => String(email || '').trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    ];
+  }
+
   async createMeetEvent(payload: MeetPayload) {
     const accessToken = await this.getAccessToken('meet');
     const calendarId =
@@ -331,6 +480,27 @@ export class GoogleService {
     throw new InternalServerErrorException(
       `Error creando Google Meet: ${JSON.stringify(lastError)}`,
     );
+  }
+
+  async downloadFileFromDrive(fileId: string): Promise<Readable> {
+    try {
+      const drive = this.getDriveClient();
+      const response = await drive.files.get(
+        { fileId, alt: 'media' },
+        { responseType: 'stream' },
+      );
+      return response.data as Readable;
+    } catch (error) {
+      const googleError =
+        (error as { response?: { data?: unknown }; message?: string })?.response
+          ?.data ||
+        (error as { message?: string })?.message ||
+        'Error desconocido';
+
+      throw new InternalServerErrorException(
+        `Error descargando archivo de Drive: ${JSON.stringify(googleError)}`,
+      );
+    }
   }
 
   private extractMeetUrl(eventData: Record<string, unknown>) {

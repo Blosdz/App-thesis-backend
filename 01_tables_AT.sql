@@ -100,6 +100,7 @@ CREATE TABLE "AT".tesis (
     porcentaje_nivel numeric(5,2),
     monto_ajuste_nivel numeric(10,2),
     descuento_analisis_estadistico numeric(10,2),
+    CONSTRAINT tesis_pkey PRIMARY KEY (id),
     CONSTRAINT tesis_estado_check CHECK (((estado)::text = ANY ((ARRAY['borrador'::character varying, 'pendiente_pago'::character varying, 'en_progreso'::character varying, 'revision'::character varying, 'completado'::character varying, 'cancelado'::character varying])::text[])))
 );
 
@@ -353,6 +354,7 @@ CREATE TABLE "AT".documentos_tesis (
     ruta_storage text,
     tipo_mime character varying(100),
     tamano_bytes bigint,
+    CONSTRAINT documentos_tesis_pkey PRIMARY KEY (id),
     CONSTRAINT documentos_tesis_estado_revision_check CHECK (((estado_revision)::text = ANY ((ARRAY['pendiente'::character varying, 'aprobado'::character varying, 'rechazado'::character varying])::text[])))
 );
 
@@ -684,6 +686,7 @@ CREATE TABLE "AT".planes (
     activo boolean DEFAULT true,
     creado_en timestamp with time zone DEFAULT now(),
     actualizado_en timestamp with time zone DEFAULT now(),
+    CONSTRAINT planes_pkey PRIMARY KEY (id),
     CONSTRAINT planes_duracion_dias_check CHECK ((duracion_dias > 0)),
     CONSTRAINT planes_precio_check CHECK ((precio >= (0)::numeric))
 );
@@ -717,7 +720,8 @@ CREATE TABLE "AT".planes_tipos_tesis_precios (
     moneda character varying DEFAULT 'PEN'::character varying NOT NULL,
     activo boolean DEFAULT true,
     creado_en timestamp with time zone DEFAULT now(),
-    actualizado_en timestamp with time zone DEFAULT now()
+    actualizado_en timestamp with time zone DEFAULT now(),
+    CONSTRAINT planes_tipos_tesis_precios_pkey PRIMARY KEY (id)
 );
 
 
@@ -934,6 +938,7 @@ CREATE TABLE "AT".usuarios (
     verificado boolean DEFAULT false,
     creado_en timestamp with time zone DEFAULT now(),
     actualizado_en timestamp with time zone DEFAULT now(),
+    CONSTRAINT usuarios_pkey PRIMARY KEY (id),
     CONSTRAINT usuarios_rol_check CHECK (((rol)::text = ANY ((ARRAY['admin'::character varying, 'asesor'::character varying, 'estudiante'::character varying])::text[])))
 );
 

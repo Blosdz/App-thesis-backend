@@ -5,8 +5,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
+import { CursosService } from '../cursos/cursos.service';
 import { DatabaseService } from '../database/database.service';
 import { GoogleService } from '../google/google.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { RegistrarPagoDto } from './dto/registrar-pago.dto';
 import { RegistrarVoucherDto } from './dto/registrar-voucher.dto';
 import { VerificarPagoDto } from './dto/verificar-pago.dto';
@@ -16,6 +18,8 @@ export class PagosService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly googleService: GoogleService,
+    private readonly notificationsService: NotificationsService,
+    private readonly cursosService: CursosService,
   ) {}
 
   async misPagos(user: CurrentUser) {
@@ -70,6 +74,16 @@ export class PagosService {
         dto.tesisId ?? null,
       ],
     );
+
+    await this.notificationsService.create({
+      userId: user.usuario_id,
+      title: 'Pago generado',
+      description: 'Se generó un pago pendiente para tu cuenta.',
+      type: 'pago_generado',
+      relatedId: result.rows[0].id,
+      path: '/student/payments',
+    });
+
     return {
       ok: true,
       message: 'Pago registrado correctamente',
@@ -223,24 +237,28 @@ export class PagosService {
 
     const verificationResult = await this.databaseService.withTransaction(
       async (client) => {
-      const currentPago = await client.query<{
-        id: string;
-        estado: string;
-      }>(
-        `SELECT id, estado
+        const currentPago = await client.query<{
+          id: string;
+          estado: string;
+          pagador_id: string;
+          concepto: string | null;
+        }>(
+          `SELECT id, estado, pagador_id, concepto
          FROM "AT".pagos
          WHERE id = $1
          LIMIT 1
          FOR UPDATE`,
-        [pagoId],
-      );
+          [pagoId],
+        );
 
-      if (!currentPago.rows[0]) {
-        throw new NotFoundException('Pago no encontrado');
-      }
+        if (!currentPago.rows[0]) {
+          throw new NotFoundException('Pago no encontrado');
+        }
 
-      const pagoResult = await client.query(
-        `UPDATE "AT".pagos
+        const pagoActual = currentPago.rows[0];
+
+        const pagoResult = await client.query(
+          `UPDATE "AT".pagos
          SET estado = $2,
              verificado_por = $3,
              verificado_en = now(),
@@ -248,34 +266,34 @@ export class PagosService {
              actualizado_en = now()
          WHERE id = $1
          RETURNING *`,
-        [
-          pagoId,
-          dto.aprobado ? 'validado' : 'rechazado',
-          user.usuario_id,
-          dto.notaVerificacion ?? null,
-        ],
-      );
+          [
+            pagoId,
+            dto.aprobado ? 'validado' : 'rechazado',
+            user.usuario_id,
+            dto.notaVerificacion ?? null,
+          ],
+        );
 
-      let reunionId: string | null = null;
+        let reunionId: string | null = null;
 
-      const planResult = await client.query<{
-        plan_id: string;
-        pagador_id: string;
-        duracion_dias: number;
-        caracteristicas: Record<string, unknown> | string | null;
-      }>(
-        `SELECT pp.plan_id, p.pagador_id, pl.duracion_dias, pl.caracteristicas
+        const planResult = await client.query<{
+          plan_id: string;
+          pagador_id: string;
+          duracion_dias: number;
+          caracteristicas: Record<string, unknown> | string | null;
+        }>(
+          `SELECT pp.plan_id, p.pagador_id, pl.duracion_dias, pl.caracteristicas
          FROM "AT".pagos_plan pp
          JOIN "AT".pagos p ON p.id = pp.pago_id
          JOIN "AT".planes pl ON pl.id = pp.plan_id
          WHERE pp.pago_id = $1
          LIMIT 1`,
-        [pagoId],
-      );
+          [pagoId],
+        );
 
-      const plan = planResult.rows[0];
+        const plan = planResult.rows[0];
 
-      if (dto.aprobado && plan && currentPago.rows[0].estado !== 'validado') {
+        if (dto.aprobado && plan && pagoActual.estado !== 'validado') {
           const asesoriasIncluidas = this.getPlanCounter(
             plan.caracteristicas,
             'asesorias_incluidas',
@@ -368,15 +386,32 @@ export class PagosService {
                AND b.tipo_control = 'contador'`,
             [suscripcion.id, plan.plan_id],
           );
-      } else if (dto.aprobado && !plan) {
-        reunionId = await this.confirmarReservaPagada(client, pagoId);
-      }
+        } else if (dto.aprobado && !plan) {
+          reunionId = await this.confirmarReservaPagada(client, pagoId);
+          await this.cursosService.activarCompraPorPago(pagoId, client);
+        }
 
-      return {
-        pago: pagoResult.rows[0],
-        reunionId,
-      };
-    },
+        if (dto.aprobado && pagoActual.estado !== 'validado') {
+          await this.notificationsService.create(
+            {
+              userId: pagoActual.pagador_id,
+              title: 'Pago aceptado',
+              description: `Tu pago${
+                pagoActual.concepto ? ` de ${pagoActual.concepto}` : ''
+              } fue aceptado correctamente.`,
+              type: 'pago_aceptado',
+              relatedId: pagoId,
+              path: '/student/payments',
+            },
+            client,
+          );
+        }
+
+        return {
+          pago: pagoResult.rows[0],
+          reunionId,
+        };
+      },
     );
 
     return {
@@ -420,6 +455,18 @@ export class PagosService {
              updated_at = now()
          WHERE id = $1`,
         [reserva.id],
+      );
+
+      await this.notificationsService.create(
+        {
+          userId: reserva.user_id,
+          title: 'Reunión creada',
+          description: 'Tu reunión fue confirmada y ya aparece en tu agenda.',
+          type: 'reunion_creada',
+          relatedId: reserva.meeting_id,
+          path: reserva.enlace_reunion ?? '/student/asesorias',
+        },
+        client,
       );
 
       return reserva.meeting_id as string;
@@ -471,6 +518,30 @@ export class PagosService {
            actualizado_en = now()
        WHERE id = $1`,
       [reserva.disponibilidad_id],
+    );
+
+    await this.notificationsService.create(
+      {
+        userId: reserva.user_id,
+        title: 'Reunión creada',
+        description: 'Tu reunión fue confirmada y ya aparece en tu agenda.',
+        type: 'reunion_creada',
+        relatedId: reunion.rows[0].id,
+        path: reserva.enlace_reunion ?? '/student/asesorias',
+      },
+      client,
+    );
+
+    await this.notificationsService.create(
+      {
+        userId: reserva.advisor_id,
+        title: 'Reunión creada',
+        description: 'Una reunión pagada fue confirmada en tu agenda.',
+        type: 'reunion_creada',
+        relatedId: reunion.rows[0].id,
+        path: reserva.enlace_reunion ?? '/advisor/reservations',
+      },
+      client,
     );
 
     return reunion.rows[0].id;
@@ -652,5 +723,48 @@ export class PagosService {
     );
 
     return `${studentName}_${thesisTitle}`.slice(0, 160);
+  }
+
+  async obtenerVoucherImagen(pagoId: string, res: any) {
+    this.assertValidUuid(pagoId);
+
+    const result = await this.databaseService.query<{
+      documento_drive_id: string | null;
+      tipo_mime_voucher: string | null;
+    }>(
+      `SELECT documento_drive_id, tipo_mime_voucher
+       FROM "AT".pagos
+       WHERE id = $1
+       LIMIT 1`,
+      [pagoId],
+    );
+
+    if (!result.rows[0] || !result.rows[0].documento_drive_id) {
+      throw new NotFoundException(
+        'Voucher no encontrado o sin archivo cargado',
+      );
+    }
+
+    const { documento_drive_id, tipo_mime_voucher } = result.rows[0];
+
+    try {
+      const stream =
+        await this.googleService.downloadFileFromDrive(documento_drive_id);
+
+      res.setHeader(
+        'Content-Type',
+        tipo_mime_voucher || 'application/octet-stream',
+      );
+      res.setHeader('Content-Disposition', 'inline');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+
+      stream.pipe(res);
+    } catch (error) {
+      console.error(
+        `Error descargando archivo ${documento_drive_id} de Drive:`,
+        error,
+      );
+      throw new NotFoundException('No se pudo obtener el archivo del voucher');
+    }
   }
 }

@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'crypto';
 import { PoolClient, QueryResultRow } from 'pg';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { DatabaseService } from '../database/database.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CotizarTesisPlanDto } from './dto/cotizar-tesis-plan.dto';
 import { IniciarPagoPlanDto } from './dto/iniciar-pago-plan.dto';
 
@@ -37,7 +38,10 @@ export interface CotizacionPlan {
 
 @Injectable()
 export class PlanesService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    private readonly notificationsService: NotificationsService,
+  ) {}
 
   async listar() {
     const result = await this.databaseService.query(
@@ -126,6 +130,18 @@ export class PlanesService {
         `INSERT INTO "AT".pagos_plan (pago_id, plan_id)
          VALUES ($1, $2)`,
         [pagoResult.rows[0].id, dto.planId],
+      );
+
+      await this.notificationsService.create(
+        {
+          userId: user.usuario_id,
+          title: 'Pago generado',
+          description: `Se generó un pago pendiente para el plan ${plan.rows[0].nombre}.`,
+          type: 'pago_generado',
+          relatedId: pagoResult.rows[0].id,
+          path: '/student/payments',
+        },
+        client,
       );
 
       return pagoResult.rows[0];

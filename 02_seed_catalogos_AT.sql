@@ -1,5 +1,28 @@
 BEGIN;
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'planes_pkey'
+      AND conrelid = '"AT".planes'::regclass
+  ) THEN
+    ALTER TABLE "AT".planes
+      ADD CONSTRAINT planes_pkey PRIMARY KEY (id);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'planes_tipos_tesis_precios_pkey'
+      AND conrelid = '"AT".planes_tipos_tesis_precios'::regclass
+  ) THEN
+    ALTER TABLE "AT".planes_tipos_tesis_precios
+      ADD CONSTRAINT planes_tipos_tesis_precios_pkey PRIMARY KEY (id);
+  END IF;
+END $$;
+
 -- Catalogo de ajustes adicionales
 WITH seed (
   id,
@@ -469,6 +492,48 @@ WHERE NOT EXISTS (
   SELECT 1
   FROM "AT".universidades u
   WHERE lower(u.nombre) = lower(s.nombre)
+);
+
+-- Tipos de sugerencia asesor
+WITH seed (codigo, nombre, descripcion) AS (
+  VALUES
+    ('observacion_general', 'Observacion general', 'Comentario general sobre el avance del documento'),
+    ('estructura', 'Estructura', 'Sugerencias sobre la estructura del documento'),
+    ('metodologia', 'Metodologia', 'Observaciones sobre el enfoque metodologico'),
+    ('referencias', 'Referencias', 'Correcciones o mejoras en citas y bibliografia'),
+    ('redaccion', 'Redaccion', 'Mejoras de claridad, estilo y coherencia')
+),
+updated AS (
+  UPDATE "AT".tipos_sugerencia_asesor tsa
+  SET
+    nombre = s.nombre,
+    descripcion = s.descripcion,
+    activo = true,
+    actualizado_en = now()
+  FROM seed s
+  WHERE tsa.codigo = s.codigo
+  RETURNING tsa.codigo
+)
+INSERT INTO "AT".tipos_sugerencia_asesor (
+  codigo,
+  nombre,
+  descripcion,
+  activo,
+  creado_en,
+  actualizado_en
+)
+SELECT
+  s.codigo,
+  s.nombre,
+  s.descripcion,
+  true,
+  now(),
+  now()
+FROM seed s
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM "AT".tipos_sugerencia_asesor tsa
+  WHERE tsa.codigo = s.codigo
 );
 
 COMMIT;

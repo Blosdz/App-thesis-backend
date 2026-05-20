@@ -2,12 +2,13 @@ import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../database/database.module';
 import { GoogleModule } from '../google/google.module';
 import { NotificationsModule } from '../notifications/notifications.module';
-import { ReunionesController } from './reuniones.controller';
-import { ReunionesService } from './reuniones.service';
+import { CursosController } from './cursos.controller';
+import { CursosService } from './cursos.service';
 
 @Module({
   imports: [DatabaseModule, GoogleModule, NotificationsModule],
-  controllers: [ReunionesController],
-  providers: [ReunionesService],
+  controllers: [CursosController],
+  providers: [CursosService],
+  exports: [CursosService],
 })
-export class ReunionesModule {}
+export class CursosModule {}

@@ -7,6 +7,7 @@ import {
 import { randomUUID } from 'crypto';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { DatabaseService } from '../database/database.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { BloquesDisponiblesDto } from './dto/bloques-disponibles.dto';
 import { CambiarEstadoRelacionDto } from './dto/cambiar-estado-relacion.dto';
 import { CrearEspacioLibreDto } from './dto/crear-espacio-libre.dto';
@@ -21,7 +22,10 @@ type Queryable = {
 
 @Injectable()
 export class AsesoresService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    private readonly notificationsService: NotificationsService,
+  ) {}
 
   async obtenerAsesores(query: ListarAsesoresQueryDto = {}) {
     return this.listarAsesores(query);
@@ -611,6 +615,15 @@ export class AsesoresService {
           throw new NotFoundException('Asesor no encontrado');
         }
 
+        const estudiante = await client.query<{ nombre: string | null }>(
+          `SELECT NULLIF(trim(coalesce(nombres, '') || ' ' || coalesce(apellidos, '')), '') AS nombre
+           FROM "AT".perfil_estudiante
+           WHERE estudiante_id = $1
+           LIMIT 1`,
+          [user.usuario_id],
+        );
+        const estudianteNombre = estudiante.rows[0]?.nombre || 'Un estudiante';
+
         const existing = await client.query(
           `SELECT *
            FROM "AT".relaciones_asesor_estudiante
@@ -633,18 +646,18 @@ export class AsesoresService {
           [asesorId, user.usuario_id, codigoPublicoId],
         );
 
-        await client.query(
-          `INSERT INTO "AT".notifications
-             (user_id, title, message, type, status, related_id)
-           VALUES ($1, $2, $3, 'solicitud_asesor', 'unread', $4)
-           ON CONFLICT DO NOTHING`,
-          [
-            asesorId,
-            'Nueva solicitud de asesoría',
-            dto.mensaje ||
-              'Un estudiante solicitó vincularse contigo como asesor.',
-            inserted.rows[0].id,
-          ],
+        await this.notificationsService.create(
+          {
+            userId: asesorId,
+            title: 'Nueva solicitud de asesoría',
+            description: `${estudianteNombre} solicitó vincularse contigo como asesor.${
+              dto.mensaje ? ` Mensaje: ${dto.mensaje}` : ''
+            }`,
+            type: 'solicitud_asesor',
+            relatedId: inserted.rows[0].id,
+            path: '/advisor/students',
+          },
+          client,
         );
 
         return inserted.rows[0];
@@ -726,6 +739,19 @@ export class AsesoresService {
             [user.usuario_id, tesis.id, relacionId],
           );
         }
+
+        await this.notificationsService.create(
+          {
+            userId: relacion.estudiante_id,
+            title: 'Solicitud aceptada',
+            description:
+              'Tu asesor aceptó la conexión y ya está vinculado a tu tesis.',
+            type: 'estudiante_aceptado',
+            relatedId: relacionId,
+            path: '/student/asesorias',
+          },
+          client,
+        );
 
         return this.obtenerDetalleEstudianteAsesorRow(
           client,

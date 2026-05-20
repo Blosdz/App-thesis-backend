@@ -5,8 +5,10 @@ import {
   Param,
   Patch,
   Post,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { CurrentUserDecorator } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -31,7 +33,9 @@ export class AdminController {
   }
 
   @Post('invitaciones')
-  encolarInvitacion(@Body() dto: { email: string; name: string; rol?: string }) {
+  encolarInvitacion(
+    @Body() dto: { email: string; name: string; rol?: string },
+  ) {
     return this.adminService.encolarInvitacion(dto);
   }
 
@@ -53,6 +57,14 @@ export class AdminController {
   @Get('pagos/:pagoId')
   obtenerPago(@Param('pagoId') pagoId: string) {
     return this.pagosService.adminObtener(pagoId);
+  }
+
+  @Get('pagos/:pagoId/voucher-imagen')
+  async obtenerVoucherImagen(
+    @Param('pagoId') pagoId: string,
+    @Res() res: Response,
+  ) {
+    return this.pagosService.obtenerVoucherImagen(pagoId, res);
   }
 
   @Patch('pagos/:pagoId/verificar')

@@ -1,10 +1,11 @@
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../database/database.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { SugerenciasController } from './sugerencias.controller';
 import { SugerenciasService } from './sugerencias.service';
 
 @Module({
-  imports: [DatabaseModule],
+  imports: [DatabaseModule, NotificationsModule],
   controllers: [SugerenciasController],
   providers: [SugerenciasService],
 })

@@ -8,5 +8,6 @@ import { DocumentosService } from './documentos.service';
   imports: [DatabaseModule, GoogleModule],
   controllers: [DocumentosController],
   providers: [DocumentosService],
+  exports: [DocumentosService],
 })
 export class DocumentosModule {}

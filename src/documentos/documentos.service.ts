@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -331,12 +330,6 @@ export class DocumentosService {
 
     if (!result.rows[0]) {
       throw new NotFoundException('Tesis no encontrada');
-    }
-
-    if (user.rol === 'asesor' && !result.rows[0].carpeta_drive_id) {
-      throw new ForbiddenException(
-        'Solo el estudiante o admin puede crear la carpeta inicial',
-      );
     }
 
     return result.rows[0];

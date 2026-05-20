@@ -7,6 +7,7 @@ import {
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { DatabaseService } from '../database/database.service';
 import { GoogleService } from '../google/google.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ActualizarEstadoReunionDto } from './dto/actualizar-estado-reunion.dto';
 import { CancelarReunionDto } from './dto/cancelar-reunion.dto';
 import { CrearReunionDto } from './dto/crear-reunion.dto';
@@ -18,6 +19,7 @@ export class ReunionesService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly googleService: GoogleService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async crear(user: CurrentUser, dto: CrearReunionDto) {
@@ -77,6 +79,30 @@ export class ReunionesService {
             moneda,
             dto.tipoReunion ?? 'asesoria',
           ],
+        );
+
+        await this.notificationsService.create(
+          {
+            userId: dto.asesorId,
+            title: 'Reunión creada',
+            description: 'Se creó una nueva reunión de tesis en tu agenda.',
+            type: 'reunion_creada',
+            relatedId: result.rows[0].id,
+            path: '/advisor/reservations',
+          },
+          client,
+        );
+
+        await this.notificationsService.create(
+          {
+            userId: result.rows[0].estudiante_id,
+            title: 'Reunión creada',
+            description: 'Se creó una nueva reunión de tesis.',
+            type: 'reunion_creada',
+            relatedId: result.rows[0].id,
+            path: '/student/asesorias',
+          },
+          client,
         );
 
         return result.rows[0];
@@ -183,14 +209,25 @@ export class ReunionesService {
         ],
       );
 
-      await client.query(
-        `INSERT INTO "AT".notifications
-           (user_id, title, message, type, status, related_id)
-         VALUES ($1, 'Nueva solicitud de cita',
-                 'Un estudiante quiere reservar una cita contigo',
-                 'solicitud_cita', 'unread', $2)
-         ON CONFLICT DO NOTHING`,
-        [dto.asesorId, inserted.rows[0].id],
+      const estudiante = await client.query<{ nombre: string | null }>(
+        `SELECT NULLIF(trim(coalesce(nombres, '') || ' ' || coalesce(apellidos, '')), '') AS nombre
+         FROM "AT".perfil_estudiante
+         WHERE estudiante_id = $1
+         LIMIT 1`,
+        [user.usuario_id],
+      );
+      const estudianteNombre = estudiante.rows[0]?.nombre || 'Un estudiante';
+
+      await this.notificationsService.create(
+        {
+          userId: dto.asesorId,
+          title: 'Nueva solicitud de cita',
+          description: `${estudianteNombre} solicitó una asesoría contigo.`,
+          type: 'solicitud_cita',
+          relatedId: inserted.rows[0].id,
+          path: '/advisor/reservations',
+        },
+        client,
       );
 
       return inserted.rows[0];
@@ -503,6 +540,31 @@ export class ReunionesService {
           [validationCitaId, reunionId, user.usuario_id],
         );
 
+        await this.notificationsService.create(
+          {
+            userId: reserva.user_id,
+            title: 'Reunión creada',
+            description:
+              'Tu solicitud fue aceptada con tu plan y la reunión quedó confirmada.',
+            type: 'reunion_creada',
+            relatedId: reunionId,
+            path: '/student/asesorias',
+          },
+          client,
+        );
+
+        await this.notificationsService.create(
+          {
+            userId: reserva.advisor_id,
+            title: 'Reunión creada',
+            description: 'Una reunión fue confirmada con el plan del estudiante.',
+            type: 'reunion_creada',
+            relatedId: reunionId,
+            path: '/advisor/reservations',
+          },
+          client,
+        );
+
         return {
           ok: true,
           validation_cita_id: validationCitaId,
@@ -536,6 +598,19 @@ export class ReunionesService {
              validated_at = now()
          WHERE id = $1`,
         [validationCitaId, pago.rows[0].id, user.usuario_id],
+      );
+
+      await this.notificationsService.create(
+        {
+          userId: reserva.user_id,
+          title: 'Pago pendiente',
+          description:
+            'Tu asesor aceptó la solicitud. Hay un pago pendiente para confirmar la reunión.',
+          type: 'pago_pendiente',
+          relatedId: pago.rows[0].id,
+          path: '/student/payments',
+        },
+        client,
       );
 
       return {
@@ -619,6 +694,42 @@ export class ReunionesService {
         [validationCitaId, reunionId, dto.enlaceReunion ?? null],
       );
 
+      await this.notificationsService.create(
+        {
+          userId: reserva.user_id,
+          title: 'Pago aceptado',
+          description: 'Tu pago fue aceptado correctamente.',
+          type: 'pago_aceptado',
+          relatedId: reserva.payment_id,
+          path: '/student/payments',
+        },
+        client,
+      );
+
+      await this.notificationsService.create(
+        {
+          userId: reserva.user_id,
+          title: 'Reunión creada',
+          description: 'Tu reunión fue confirmada y ya aparece en tu agenda.',
+          type: 'reunion_creada',
+          relatedId: reunionId,
+          path: dto.enlaceReunion ?? '/student/asesorias',
+        },
+        client,
+      );
+
+      await this.notificationsService.create(
+        {
+          userId: reserva.advisor_id,
+          title: 'Reunión creada',
+          description: 'Una reunión pagada fue confirmada en tu agenda.',
+          type: 'reunion_creada',
+          relatedId: reunionId,
+          path: dto.enlaceReunion ?? '/advisor/reservations',
+        },
+        client,
+      );
+
       return {
         ok: true,
         validation_cita_id: validationCitaId,
@@ -671,6 +782,32 @@ export class ReunionesService {
          WHERE meeting_id = $1`,
         [reunionId, dto.enlaceReunion ?? null],
       );
+
+      if (dto.enlaceReunion) {
+        await this.notificationsService.create(
+          {
+            userId: result.rows[0].estudiante_id,
+            title: 'URL de sesión disponible',
+            description: 'Ya tienes el enlace de sesión para tu reunión.',
+            type: 'url_sesion_generada',
+            relatedId: reunionId,
+            path: dto.enlaceReunion,
+          },
+          client,
+        );
+
+        await this.notificationsService.create(
+          {
+            userId: result.rows[0].asesor_id,
+            title: 'URL de sesión disponible',
+            description: 'Ya tienes el enlace de sesión para la reunión.',
+            type: 'url_sesion_generada',
+            relatedId: reunionId,
+            path: dto.enlaceReunion,
+          },
+          client,
+        );
+      }
 
       return result.rows[0];
     });
