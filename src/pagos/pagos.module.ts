@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../database/database.module';
+import { EmailModule } from '../email/email.module';
 import { GoogleModule } from '../google/google.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PlanesModule } from '../planes/planes.module';
@@ -14,6 +15,7 @@ import { PagosService } from './pagos.service';
     GoogleModule,
     NotificationsModule,
     CursosModule,
+    EmailModule,
   ],
   controllers: [PagosController],
   providers: [PagosService],

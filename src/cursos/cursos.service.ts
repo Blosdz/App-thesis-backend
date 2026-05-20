@@ -8,8 +8,8 @@ import { randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { DatabaseService } from '../database/database.service';
-import { GoogleService } from '../google/google.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { LocalStorageService } from '../storage/local-storage.service';
 import { ActualizarCursoDto } from './dto/actualizar-curso.dto';
 import { CrearCursoDto } from './dto/crear-curso.dto';
 import { CrearMaterialCursoDto } from './dto/crear-material-curso.dto';
@@ -22,8 +22,8 @@ type Queryable = {
 export class CursosService {
   constructor(
     private readonly databaseService: DatabaseService,
-    private readonly googleService: GoogleService,
     private readonly notificationsService: NotificationsService,
+    private readonly localStorageService: LocalStorageService,
   ) {}
 
   async misCursosAsesor(user: CurrentUser) {
@@ -64,11 +64,6 @@ export class CursosService {
           dto.estado ?? 'borrador',
         ],
       );
-
-      await this.restrictDriveIdsToAdvisor({
-        driveIds: [dto.portadaDriveId],
-        advisorEmail: user.email,
-      });
 
       return cursoResult;
     });
@@ -115,11 +110,6 @@ export class CursosService {
         ],
       );
 
-      await this.restrictDriveIdsToAdvisor({
-        driveIds: [dto.portadaDriveId],
-        advisorEmail: user.email,
-      });
-
       return cursoResult;
     });
 
@@ -141,10 +131,10 @@ export class CursosService {
     const result = await this.databaseService.withTransaction(async (client) => {
       const materialResult = await client.query(
         `INSERT INTO "AT".profesor_curso_materiales
-           (curso_id, titulo, descripcion, tipo, drive_file_id, drive_folder_id,
-            url_drive, nombre_archivo, tipo_mime, tamano_bytes, url_externa,
-            orden, es_vista_previa)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          (curso_id, titulo, descripcion, tipo, drive_file_id, drive_folder_id,
+            url_drive, ruta_storage, url_storage, nombre_archivo, tipo_mime,
+            tamano_bytes, url_externa, orden, es_vista_previa)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
          RETURNING *`,
         [
           cursoId,
@@ -154,6 +144,8 @@ export class CursosService {
           dto.driveFileId ?? null,
           dto.driveFolderId ?? null,
           dto.urlDrive ?? null,
+          dto.rutaStorage ?? null,
+          dto.urlStorage ?? dto.urlDrive ?? null,
           dto.nombreArchivo ?? null,
           dto.tipoMime ?? null,
           dto.tamanoBytes ?? null,
@@ -163,11 +155,6 @@ export class CursosService {
         ],
       );
 
-      await this.restrictDriveIdsToAdvisor({
-        driveIds: [dto.driveFileId, dto.driveFolderId],
-        advisorEmail: user.email,
-      });
-
       return materialResult;
     });
 
@@ -175,6 +162,83 @@ export class CursosService {
       ok: true,
       message: 'Material agregado correctamente',
       data: result.rows[0],
+    };
+  }
+
+  async subirMaterialesAsesor(
+    user: CurrentUser,
+    cursoId: string,
+    files: Express.Multer.File[] | undefined,
+    payload: {
+      titulo?: string;
+      descripcion?: string;
+      tipo?: string;
+      orden?: string | number;
+      esVistaPrevia?: string | boolean;
+    },
+  ) {
+    this.assertValidUuid(cursoId, 'ID de curso inválido');
+    await this.assertCursoOwner(user, cursoId);
+
+    const selectedFiles = Array.isArray(files)
+      ? files.filter((file) => file?.buffer?.length)
+      : [];
+
+    if (!selectedFiles.length) {
+      throw new BadRequestException('Selecciona al menos un archivo');
+    }
+
+    const baseOrder = Number(payload.orden || 1);
+    const esVistaPrevia =
+      payload.esVistaPrevia === true ||
+      String(payload.esVistaPrevia).toLowerCase() === 'true';
+    const tipo = this.resolveMaterialType(payload.tipo, selectedFiles[0]);
+
+    const result = await this.databaseService.withTransaction(async (client) => {
+      const insertedRows: any[] = [];
+
+      for (const [index, file] of selectedFiles.entries()) {
+        const savedFile = await this.localStorageService.saveFile(file, {
+          directory: `cursos/${cursoId}/materiales`,
+          fileNamePrefix: file.originalname,
+        });
+        const title =
+          selectedFiles.length === 1
+            ? payload.titulo || this.stripExtension(file.originalname)
+            : `${payload.titulo || this.stripExtension(file.originalname)} ${index + 1}`;
+
+        const inserted = await client.query(
+          `INSERT INTO "AT".profesor_curso_materiales
+             (curso_id, titulo, descripcion, tipo, drive_file_id, drive_folder_id,
+              url_drive, ruta_storage, url_storage, nombre_archivo, tipo_mime,
+              tamano_bytes, url_externa, orden, es_vista_previa)
+           VALUES ($1, $2, $3, $4, null, null, $5, $6, $5, $7, $8, $9, null, $10, $11)
+           RETURNING *`,
+          [
+            cursoId,
+            title,
+            payload.descripcion || null,
+            this.resolveMaterialType(payload.tipo, file) || tipo,
+            savedFile.publicUrl,
+            savedFile.relativePath,
+            file.originalname,
+            savedFile.mimeType,
+            savedFile.size,
+            Math.max(1, baseOrder + index),
+            esVistaPrevia,
+          ],
+        );
+
+        insertedRows.push(inserted.rows[0]);
+      }
+
+      return insertedRows;
+    });
+
+    return {
+      ok: true,
+      message: 'Materiales subidos correctamente',
+      data: result,
     };
   }
 
@@ -492,12 +556,6 @@ export class CursosService {
     );
     const curso = cursoResult.rows[0];
 
-    await this.grantCourseDriveAccessToBuyer(
-      compra.curso_id,
-      compra.estudiante_id,
-      queryable,
-    );
-
     await this.notificationsService.create(
       {
         userId: compra.estudiante_id,
@@ -591,79 +649,27 @@ export class CursosService {
     }
   }
 
-  private async grantCourseDriveAccessToBuyer(
-    cursoId: string,
-    estudianteId: string,
-    queryable: Queryable,
-  ) {
-    const accessResult = (await queryable.query(
-      `SELECT
-         aa.email AS asesor_email,
-         ae.email AS estudiante_email,
-         ARRAY_REMOVE(ARRAY_AGG(DISTINCT drive_id), NULL) AS drive_ids
-       FROM "AT".estudiante_cursos ec
-       JOIN "AT".profesor_cursos pc ON pc.id = ec.curso_id
-       JOIN "AT".usuarios asesor ON asesor.id = pc.asesor_id
-       JOIN "AT".auth_usuarios aa ON aa.id = asesor.auth_usuario_id
-       JOIN "AT".usuarios estudiante ON estudiante.id = ec.estudiante_id
-       JOIN "AT".auth_usuarios ae ON ae.id = estudiante.auth_usuario_id
-       LEFT JOIN "AT".profesor_curso_materiales pm
-         ON pm.curso_id = pc.id
-        AND pm.activo = true
-       LEFT JOIN LATERAL (
-         VALUES
-           (pc.portada_drive_id),
-           (pm.drive_file_id),
-           (pm.drive_folder_id)
-       ) all_drive(drive_id) ON true
-       WHERE ec.curso_id = $1
-         AND ec.estudiante_id = $2
-         AND ec.estado = 'activo'
-       GROUP BY aa.email, ae.email`,
-      [cursoId, estudianteId],
-    )) as {
-      rows: Array<{
-      asesor_email: string | null;
-      estudiante_email: string | null;
-      drive_ids: string[];
-      }>;
-    };
-
-    const access = accessResult.rows[0];
-    if (!access?.asesor_email || !access?.estudiante_email) return;
-
-    const driveIds = [...new Set((access.drive_ids || []).filter(Boolean))];
-    for (const driveId of driveIds) {
-      await this.googleService.restrictDriveItemToEmails({
-        fileId: driveId,
-        writerEmails: [access.asesor_email],
-        readerEmails: [access.estudiante_email],
-      });
-    }
-  }
-
-  private async restrictDriveIdsToAdvisor({
-    driveIds,
-    advisorEmail,
-  }: {
-    driveIds: Array<string | undefined>;
-    advisorEmail: string;
-  }) {
-    const uniqueDriveIds = [
-      ...new Set(driveIds.filter((driveId): driveId is string => Boolean(driveId))),
-    ];
-
-    for (const driveId of uniqueDriveIds) {
-      await this.googleService.restrictDriveItemToEmails({
-        fileId: driveId,
-        writerEmails: [advisorEmail],
-        readerEmails: [],
-      });
-    }
-  }
-
   private buildPaymentCode(seed: string) {
     return `PAY-${seed.replace(/-/g, '').slice(0, 12).toUpperCase()}`;
+  }
+
+  private resolveMaterialType(tipo: string | undefined, file: Express.Multer.File) {
+    const allowedTypes = ['documento', 'video', 'link', 'plantilla', 'imagen', 'zip', 'otro'];
+    if (tipo && allowedTypes.includes(tipo)) {
+      return tipo;
+    }
+
+    const mime = file.mimetype || '';
+    const extension = file.originalname.split('.').pop()?.toLowerCase();
+
+    if (mime.startsWith('video/')) return 'video';
+    if (mime.startsWith('image/')) return 'imagen';
+    if (extension === 'zip') return 'zip';
+    return 'documento';
+  }
+
+  private stripExtension(fileName: string) {
+    return fileName.replace(/\.[^.]+$/, '');
   }
 
   private assertValidUuid(value: string, message: string) {

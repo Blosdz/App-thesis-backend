@@ -9,6 +9,7 @@ import { PoolClient } from 'pg';
 import { CryptoService } from '../common/crypto/crypto.service';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { DatabaseService } from '../database/database.service';
+import { LocalStorageService } from '../storage/local-storage.service';
 import { GuardarPerfilAsesorDto } from './dto/guardar-perfil-asesor.dto';
 import { GuardarPerfilEstudianteDto } from './dto/guardar-perfil-estudiante.dto';
 
@@ -19,6 +20,7 @@ type StudentProfileRow = {
   apellidos: string | null;
   universidad_id: string | null;
   carrera: string | null;
+  foto_url: string | null;
   creado_en: Date | string | null;
   actualizado_en: Date | string | null;
   dni_encriptado: string | null;
@@ -50,6 +52,7 @@ export class UsuariosService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly cryptoService: CryptoService,
+    private readonly localStorageService: LocalStorageService,
   ) {}
 
   async obtenerMiPerfil(user: CurrentUser) {
@@ -89,6 +92,7 @@ export class UsuariosService {
          pe.apellidos,
          pe.universidad_id,
          pe.carrera,
+         pe.foto_url,
          COALESCE(pe.creado_en, dpe.creado_en) AS creado_en,
          COALESCE(pe.actualizado_en, dpe.actualizado_en) AS actualizado_en,
          dpe.dni_encriptado,
@@ -142,6 +146,7 @@ export class UsuariosService {
           apellidos: perfilRow.apellidos,
           universidad_id: perfilRow.universidad_id,
           carrera: perfilRow.carrera,
+          foto_url: perfilRow.foto_url,
           creado_en: perfilRow.creado_en,
           actualizado_en: perfilRow.actualizado_en,
           dni_encriptado: dniEncriptado,
@@ -275,6 +280,59 @@ export class UsuariosService {
     return { ok: true, data: { rol: user.rol, usuario_id: user.usuario_id } };
   }
 
+  async subirFotoPerfil(
+    user: CurrentUser,
+    file: Express.Multer.File | undefined,
+  ) {
+    if (user.rol !== 'estudiante' && user.rol !== 'asesor') {
+      throw new ForbiddenException('Esta operación no está disponible para tu rol');
+    }
+
+    if (!file) {
+      throw new BadRequestException('Se requiere file');
+    }
+
+    if (!file.mimetype?.startsWith('image/')) {
+      throw new BadRequestException('La foto debe ser una imagen');
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      throw new BadRequestException('La foto no debe superar 5MB');
+    }
+
+    const savedFile = await this.localStorageService.saveFile(file, {
+      directory: `perfiles/${user.rol}/${user.usuario_id}`,
+      fileNamePrefix: 'foto-perfil',
+    });
+
+    const tableName =
+      user.rol === 'asesor' ? 'perfil_publico_asesor' : 'perfil_estudiante';
+    const ownerColumn = user.rol === 'asesor' ? 'asesor_id' : 'estudiante_id';
+
+    const updated = await this.databaseService.query(
+      `UPDATE "AT".${tableName}
+       SET foto_url = $2, actualizado_en = now()
+       WHERE ${ownerColumn} = $1
+       RETURNING *`,
+      [user.usuario_id, savedFile.publicUrl],
+    );
+
+    if (!updated.rows[0]) {
+      throw new BadRequestException(
+        'Primero guarda tu perfil antes de subir una foto',
+      );
+    }
+
+    return {
+      ok: true,
+      message: 'Foto de perfil subida correctamente',
+      data: {
+        foto_url: savedFile.publicUrl,
+        ruta_storage: savedFile.relativePath,
+      },
+    };
+  }
+
   private async upsertPerfilEstudiante(
     client: PoolClient,
     user: CurrentUser,
@@ -295,6 +353,7 @@ export class UsuariosService {
              apellidos = $3,
              universidad_id = $4,
              carrera = $5,
+             foto_url = COALESCE($6, foto_url),
              actualizado_en = now()
          WHERE id = $1
          RETURNING *`,
@@ -304,6 +363,7 @@ export class UsuariosService {
           dto.apellidos,
           dto.universidadId ?? null,
           dto.carrera ?? null,
+          dto.fotoUrl ?? null,
         ],
       );
 
@@ -312,8 +372,8 @@ export class UsuariosService {
 
     const inserted = await client.query(
       `INSERT INTO "AT".perfil_estudiante
-         (estudiante_id, nombres, apellidos, universidad_id, carrera)
-       VALUES ($1, $2, $3, $4, $5)
+         (estudiante_id, nombres, apellidos, universidad_id, carrera, foto_url)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
       [
         user.usuario_id,
@@ -321,6 +381,7 @@ export class UsuariosService {
         dto.apellidos,
         dto.universidadId ?? null,
         dto.carrera ?? null,
+        dto.fotoUrl ?? null,
       ],
     );
 
@@ -580,6 +641,7 @@ export class UsuariosService {
       apellidos: perfil.apellidos ?? '',
       universidad_id: perfil.universidad_id,
       carrera: perfil.carrera ?? '',
+      foto_url: perfil.foto_url ?? '',
       dni: this.cryptoService.decrypt(perfil.dni_encriptado) ?? '',
       telefono: this.cryptoService.decrypt(perfil.telefono_encriptado),
       creado_en: perfil.creado_en,

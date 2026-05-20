@@ -42,6 +42,18 @@ CREATE TABLE "AT".auth_usuarios (
     actualizado_en timestamptz DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS "AT".email_verification_tokens (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    auth_usuario_id uuid NOT NULL REFERENCES "AT".auth_usuarios(id) ON DELETE CASCADE,
+    token_hash text NOT NULL,
+    expira_en timestamptz NOT NULL,
+    usado_en timestamptz,
+    creado_en timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_hash
+ON "AT".email_verification_tokens(token_hash);
+
 CREATE TABLE "AT".estudiante_documentos (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     thesis_id uuid NOT NULL,
@@ -646,9 +658,12 @@ CREATE TABLE "AT".perfil_estudiante (
     apellidos character varying(150) NOT NULL,
     universidad_id uuid,
     carrera character varying(150),
+    foto_url text,
     creado_en timestamp with time zone DEFAULT now(),
     actualizado_en timestamp with time zone DEFAULT now()
 );
+
+ALTER TABLE "AT".perfil_estudiante ADD COLUMN IF NOT EXISTS foto_url text;
 
 
 --

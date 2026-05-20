@@ -5,8 +5,11 @@ import {
   Param,
   Patch,
   Post,
+  UploadedFiles,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FilesInterceptor } from '@nestjs/platform-express';
 import { CurrentUserDecorator } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -55,6 +58,30 @@ export class CursosController {
     @Body() dto: CrearMaterialCursoDto,
   ) {
     return this.cursosService.crearMaterialAsesor(user, cursoId, dto);
+  }
+
+  @Roles('asesor')
+  @Post('asesor/:cursoId/materiales/archivos')
+  @UseInterceptors(FilesInterceptor('files'))
+  subirMaterialesAsesor(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('cursoId') cursoId: string,
+    @UploadedFiles() files: Express.Multer.File[],
+    @Body()
+    payload: {
+      titulo?: string;
+      descripcion?: string;
+      tipo?: string;
+      orden?: string;
+      esVistaPrevia?: string;
+    },
+  ) {
+    return this.cursosService.subirMaterialesAsesor(
+      user,
+      cursoId,
+      files,
+      payload,
+    );
   }
 
   @Roles('asesor')

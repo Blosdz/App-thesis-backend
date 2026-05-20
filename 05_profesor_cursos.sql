@@ -51,10 +51,14 @@ CREATE TABLE IF NOT EXISTS "AT".profesor_curso_materiales (
 
     tipo varchar(30) NOT NULL DEFAULT 'documento',
 
-    -- Google Drive
+    -- Compatibilidad con integraciones anteriores
     drive_file_id text,
     drive_folder_id text,
     url_drive text,
+
+    -- Storage local del backend
+    ruta_storage text,
+    url_storage text,
 
     nombre_archivo text,
     tipo_mime varchar(150),
@@ -148,6 +152,9 @@ ON "AT".profesor_curso_materiales(curso_id);
 
 CREATE INDEX IF NOT EXISTS idx_profesor_curso_materiales_orden
 ON "AT".profesor_curso_materiales(curso_id, orden);
+
+ALTER TABLE "AT".profesor_curso_materiales ADD COLUMN IF NOT EXISTS ruta_storage text;
+ALTER TABLE "AT".profesor_curso_materiales ADD COLUMN IF NOT EXISTS url_storage text;
 
 CREATE INDEX IF NOT EXISTS idx_estudiante_cursos_estudiante_id
 ON "AT".estudiante_cursos(estudiante_id);

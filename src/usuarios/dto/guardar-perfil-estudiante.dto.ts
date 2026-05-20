@@ -26,6 +26,12 @@ export class GuardarPerfilEstudianteDto {
   @MaxLength(150)
   carrera?: string;
 
+  @OptionalTrimmedString()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  fotoUrl?: string;
+
   @TrimString()
   @IsString()
   @Length(1, 20)

@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Put, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Put,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUserDecorator } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
@@ -22,6 +32,15 @@ export class UsuariosController {
     @Body() payload: Record<string, unknown>,
   ) {
     return this.usuariosService.guardarMiPerfil(user, payload);
+  }
+
+  @Post('perfil/foto')
+  @UseInterceptors(FileInterceptor('file'))
+  subirFotoPerfil(
+    @CurrentUserDecorator() user: CurrentUser,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.usuariosService.subirFotoPerfil(user, file);
   }
 
   @Get('perfil/estudiante')

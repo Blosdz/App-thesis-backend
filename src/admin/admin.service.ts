@@ -1,11 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { DatabaseService } from '../database/database.service';
+import { EmailService } from '../email/email.service';
 import { VerificarPagoDto } from '../pagos/dto/verificar-pago.dto';
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly databaseService: DatabaseService) {}
+  constructor(
+    private readonly databaseService: DatabaseService,
+    private readonly emailService: EmailService,
+  ) {}
 
   async listarUsuarios() {
     const result = await this.databaseService.query(
@@ -184,11 +188,16 @@ export class AdminService {
        RETURNING *`,
       [reunionId, dto.estado, dto.nota ?? null],
     );
+    const reunion = result.rows[0] ?? null;
+
+    if (reunion?.estado === 'confirmado') {
+      await this.sendMeetingConfirmedEmails(reunion.id);
+    }
 
     return {
       ok: true,
       admin_id: user.usuario_id,
-      data: result.rows[0] ?? null,
+      data: reunion,
     };
   }
 
@@ -241,6 +250,81 @@ export class AdminService {
       return updated.rows[0];
     });
 
+    if (dto.aprobado && result?.id) {
+      await this.sendMeetingConfirmedEmails(result.id);
+      if (result.pago_id) {
+        await this.sendPaymentSuccessEmail(result.pago_id);
+      }
+    }
+
     return { ok: true, data: result };
+  }
+
+  private async sendMeetingConfirmedEmails(reunionId: string) {
+    const result = await this.databaseService.query<{
+      estudiante_email: string | null;
+      asesor_email: string | null;
+      inicio: Date | string | null;
+      enlace_reunion: string | null;
+      motivo: string | null;
+    }>(
+      `SELECT
+         estudiante_auth.email AS estudiante_email,
+         asesor_auth.email AS asesor_email,
+         r.inicio,
+         r.enlace_reunion,
+         r.motivo
+       FROM "AT".reuniones_asesor r
+       JOIN "AT".usuarios estudiante ON estudiante.id = r.estudiante_id
+       JOIN "AT".auth_usuarios estudiante_auth ON estudiante_auth.id = estudiante.auth_usuario_id
+       JOIN "AT".usuarios asesor ON asesor.id = r.asesor_id
+       JOIN "AT".auth_usuarios asesor_auth ON asesor_auth.id = asesor.auth_usuario_id
+       WHERE r.id = $1
+       LIMIT 1`,
+      [reunionId],
+    );
+
+    const reunion = result.rows[0];
+    const recipients = [reunion?.estudiante_email, reunion?.asesor_email].filter(
+      (email): email is string => Boolean(email),
+    );
+    if (!recipients.length) return;
+
+    await this.emailService.sendMeetingConfirmedEmail({
+      to: recipients,
+      title: reunion?.motivo ? `Reunión confirmada: ${reunion.motivo}` : undefined,
+      startAt: reunion?.inicio,
+      meetingUrl: reunion?.enlace_reunion,
+    });
+  }
+
+  private async sendPaymentSuccessEmail(pagoId: string) {
+    const result = await this.databaseService.query<{
+      email: string | null;
+      concepto: string | null;
+      monto: string | null;
+      moneda: string | null;
+    }>(
+      `SELECT
+         au.email,
+         p.concepto,
+         p.monto::text,
+         COALESCE(p.metadata ->> 'moneda', 'PEN') AS moneda
+       FROM "AT".pagos p
+       JOIN "AT".usuarios u ON u.id = p.pagador_id
+       JOIN "AT".auth_usuarios au ON au.id = u.auth_usuario_id
+       WHERE p.id = $1
+       LIMIT 1`,
+      [pagoId],
+    );
+
+    const pago = result.rows[0];
+    if (!pago?.email) return;
+
+    await this.emailService.sendPaymentSuccessEmail({
+      to: pago.email,
+      concepto: pago.concepto,
+      monto: pago.monto && pago.moneda ? `${pago.moneda} ${pago.monto}` : pago.monto,
+    });
   }
 }

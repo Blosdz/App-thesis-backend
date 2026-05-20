@@ -34,6 +34,14 @@ export class CrearMaterialCursoDto {
 
   @IsOptional()
   @IsString()
+  rutaStorage?: string;
+
+  @IsOptional()
+  @IsString()
+  urlStorage?: string;
+
+  @IsOptional()
+  @IsString()
   nombreArchivo?: string;
 
   @IsOptional()
