@@ -2,10 +2,12 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'crypto';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { DatabaseService } from '../database/database.service';
+import { DocGeneratorService } from '../doc-generator/doc-generator.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlanesService } from '../planes/planes.service';
 import { ActualizarEstadoTesisDto } from './dto/actualizar-estado-tesis.dto';
@@ -18,6 +20,7 @@ export class TesisService {
     private readonly databaseService: DatabaseService,
     private readonly planesService: PlanesService,
     private readonly notificationsService: NotificationsService,
+    private readonly docGeneratorService: DocGeneratorService,
   ) {}
 
   async crear(user: CurrentUser, dto: CrearTesisDto) {
@@ -375,6 +378,31 @@ export class TesisService {
       ok: true,
       message: 'Asesor asignado correctamente',
       data: asignacion,
+    };
+  }
+
+  async generarDocumentoDocx(
+    user: CurrentUser,
+    tesisId: string,
+    authorization?: string,
+  ) {
+    await this.obtenerDetalle(user, tesisId);
+
+    if (!authorization) {
+      throw new UnauthorizedException(
+        'No se pudo reenviar la sesión para subir el documento generado',
+      );
+    }
+
+    const document = await this.docGeneratorService.generateDocx(tesisId, {
+      uploadToBackend: true,
+      authorization,
+    });
+
+    return {
+      ok: true,
+      message: 'Documento DOCX generado y subido correctamente',
+      data: document,
     };
   }
 

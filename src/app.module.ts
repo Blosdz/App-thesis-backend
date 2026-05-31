@@ -23,6 +23,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { DeepseekModule } from './deepseek/deepseek.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { CursosModule } from './cursos/cursos.module';
+import { DocGeneratorModule } from './doc-generator/doc-generator.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { CursosModule } from './cursos/cursos.module';
     DeepseekModule,
     NotificationsModule,
     CursosModule,
+    DocGeneratorModule,
   ],
   controllers: [AppController],
   providers: [AppService],

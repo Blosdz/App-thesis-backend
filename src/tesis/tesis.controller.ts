@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
@@ -72,5 +73,14 @@ export class TesisController {
     @Body() dto: AsignarAsesorDto,
   ) {
     return this.tesisService.asignarAsesor(user, tesisId, dto);
+  }
+
+  @Post(':tesisId/documentos/docx')
+  generarDocumentoDocx(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('tesisId') tesisId: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    return this.tesisService.generarDocumentoDocx(user, tesisId, authorization);
   }
 }

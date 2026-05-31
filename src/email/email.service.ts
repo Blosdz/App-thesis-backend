@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Resend } from 'resend';
 
 type SendEmailInput = {
   to: string | string[];
@@ -8,19 +9,30 @@ type SendEmailInput = {
   text?: string;
 };
 
+export type SendEmailResult =
+  | { ok: true }
+  | { ok: false; skipped?: true; status?: number; error?: string };
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
+  private readonly resend: Resend | null;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(private readonly configService: ConfigService) {
+    const apiKey = this.configService.get<string>('RESEND_API_KEY')?.trim();
+    this.resend = apiKey ? new Resend(apiKey) : null;
+  }
 
-  async sendEmail(input: SendEmailInput) {
-    const apiKey = this.configService.get<string>('RESEND_API_KEY');
+  isConfigured() {
+    return Boolean(this.resend);
+  }
+
+  async sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
     const from =
       this.configService.get<string>('EMAIL_FROM') ||
       'AppThesis <onboarding@resend.dev>';
 
-    if (!apiKey) {
+    if (!this.resend) {
       this.logger.warn(
         `Email no enviado: falta RESEND_API_KEY. To=${JSON.stringify(
           input.to,
@@ -31,29 +43,21 @@ export class EmailService {
     }
 
     try {
-      const response = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from,
-          to: Array.isArray(input.to) ? input.to : [input.to],
-          subject: input.subject,
-          html: input.html,
-          text: input.text,
-        }),
+      const { error } = await this.resend.emails.send({
+        from,
+        to: Array.isArray(input.to) ? input.to : [input.to],
+        subject: input.subject,
+        html: input.html,
+        text: input.text,
       });
 
-      if (!response.ok) {
-        const body = await response.text();
-        this.logger.error(`No se pudo enviar email: ${response.status} ${body}`);
-        return { ok: false, status: response.status };
+      if (error) {
+        this.logger.error(`No se pudo enviar email con Resend: ${error.message}`);
+        return { ok: false, error: error.name || 'resend_error' };
       }
     } catch (error) {
-      this.logger.error('No se pudo conectar con el proveedor de email', error);
-      return { ok: false, error: 'provider_unavailable' };
+      this.logger.error('No se pudo conectar con Resend', error);
+      return { ok: false, error: 'resend_unavailable' };
     }
 
     return { ok: true };

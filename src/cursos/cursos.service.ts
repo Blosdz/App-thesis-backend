@@ -259,7 +259,6 @@ export class CursosService {
 
   async cursosDeAsesor(user: CurrentUser, asesorId: string) {
     this.assertValidUuid(asesorId, 'ID de asesor inválido');
-    await this.assertRelacionActiva(user.usuario_id, asesorId);
 
     const result = await this.databaseService.query(
       `SELECT

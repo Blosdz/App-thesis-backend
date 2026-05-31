@@ -1052,3 +1052,39 @@ CREATE VIEW "AT".vw_log_validacion_sugerencia AS
 --
 
 \unrestrict 5gJFp3D00Q4yJbB0brgAhl4cfUG6nevYxScv0hLzbbIPN0el6gruUiffS33feb3
+
+
+create table if not exists "AT".tesis_references (
+    id uuid primary key default gen_random_uuid(),
+
+    tesis_id uuid not null references "AT".tesis(id) on delete cascade,
+
+    data jsonb not null,
+
+    version integer not null default 1,
+
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    deleted_at timestamptz null
+);
+create table if not exists "AT".tesis_contents (
+    id uuid primary key default gen_random_uuid(),
+
+    tesis_id uuid not null references "AT".tesis(id) on delete cascade,
+
+    data jsonb not null,
+
+    version integer not null default 1,
+
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    deleted_at timestamptz null
+);
+
+create index if not exists idx_tesis_references_tesis_active
+on "AT".tesis_references (tesis_id)
+where deleted_at is null;
+
+create index if not exists idx_tesis_contents_tesis_active
+on "AT".tesis_contents (tesis_id)
+where deleted_at is null;

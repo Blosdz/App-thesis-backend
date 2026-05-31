@@ -3,6 +3,7 @@ import {
   Injectable,
   InternalServerErrorException,
   Logger,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -40,6 +41,12 @@ export class AuthService {
 
   async register(dto: RegisterDto) {
     try {
+      if (!this.emailService.isConfigured()) {
+        throw new ServiceUnavailableException(
+          'El servicio de correo no está configurado. No se puede crear la cuenta sin enviar el enlace de verificación.',
+        );
+      }
+
       const password = dto.contrasena ?? 'app_theseis';
       await this.ensureEmailVerificationTable();
       const usuario = await this.databaseService.withTransaction(
@@ -72,15 +79,22 @@ export class AuthService {
       const verification = await this.createEmailVerificationToken(
         usuario.auth_usuario_id,
       );
-      await this.emailService.sendVerificationEmail({
+      const emailResult = await this.emailService.sendVerificationEmail({
         to: usuario.email,
         verificationUrl: verification.url,
       });
+      if (!emailResult.ok) {
+        await this.deleteCreatedRegistration(usuario.auth_usuario_id);
+        throw new ServiceUnavailableException(
+          'No se pudo enviar el correo de verificación. La cuenta no fue creada.',
+        );
+      }
 
       return {
         ok: true,
         message:
           'Usuario creado correctamente. Revisa tu correo para verificar la cuenta.',
+        email_sent: true,
         usuario: this.publicUser(usuario),
         verification_url: verification.devUrl,
       };
@@ -88,6 +102,9 @@ export class AuthService {
       this.logger.error('Error al registrar usuario', error);
       if (this.isPgError(error, '23505')) {
         throw new BadRequestException('El email ya está registrado');
+      }
+      if (error instanceof ServiceUnavailableException) {
+        throw error;
       }
       throw new InternalServerErrorException('No se pudo crear el usuario');
     }
@@ -398,5 +415,27 @@ export class AuthService {
       url,
       devUrl: process.env.NODE_ENV === 'production' ? undefined : url,
     };
+  }
+
+  private async deleteCreatedRegistration(authUsuarioId: string) {
+    await this.databaseService.withTransaction(async (client) => {
+      await client.query(
+        `DELETE FROM "AT".email_verification_tokens
+         WHERE auth_usuario_id = $1`,
+        [authUsuarioId],
+      );
+      await client.query(
+        `DELETE FROM "AT".usuarios
+         WHERE auth_usuario_id = $1`,
+        [authUsuarioId],
+      );
+      await client.query(
+        `DELETE FROM "AT".auth_usuarios
+         WHERE id = $1
+           AND email_verificado = false
+           AND ultimo_login_en IS NULL`,
+        [authUsuarioId],
+      );
+    });
   }
 }
