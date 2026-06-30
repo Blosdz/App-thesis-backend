@@ -6,11 +6,15 @@ import {
   Param,
   Patch,
   Post,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUserDecorator } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
+import { ActualizarFormatoDocTesisDto } from './dto/actualizar-formato-doc-tesis.dto';
 import { ActualizarEstadoTesisDto } from './dto/actualizar-estado-tesis.dto';
 import { AsignarAsesorDto } from './dto/asignar-asesor.dto';
 import { CrearTesisConPlanDto, CrearTesisDto } from './dto/crear-tesis.dto';
@@ -66,6 +70,15 @@ export class TesisController {
     return this.tesisService.actualizarEstado(user, tesisId, dto);
   }
 
+  @Patch(':tesisId/formato-doc')
+  actualizarFormatoDoc(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('tesisId') tesisId: string,
+    @Body() dto: ActualizarFormatoDocTesisDto,
+  ) {
+    return this.tesisService.actualizarFormatoDoc(user, tesisId, dto);
+  }
+
   @Post(':tesisId/asignar-asesor')
   asignarAsesor(
     @CurrentUserDecorator() user: CurrentUser,
@@ -73,6 +86,16 @@ export class TesisController {
     @Body() dto: AsignarAsesorDto,
   ) {
     return this.tesisService.asignarAsesor(user, tesisId, dto);
+  }
+
+  @Post(':tesisId/caratula')
+  @UseInterceptors(FileInterceptor('file'))
+  subirCaratula(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('tesisId') tesisId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.tesisService.subirCaratula(user, tesisId, file);
   }
 
   @Post(':tesisId/documentos/docx')

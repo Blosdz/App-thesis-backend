@@ -2,11 +2,14 @@ import {
   BadGatewayException,
   HttpException,
   Injectable,
+  NotFoundException,
   StreamableFile,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Readable } from 'stream';
 import type { ReadableStream as NodeReadableStream } from 'stream/web';
+import type { CurrentUser } from '../common/interfaces/current-user.interface';
+import { DatabaseService } from '../database/database.service';
 
 type JsonRequestInit = Omit<RequestInit, 'body'> & {
   body?: unknown;
@@ -17,79 +20,142 @@ type GenerateDocxOptions = {
   authorization?: string;
 };
 
+const DOCX_MIME =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const DOCM_MIME = 'application/vnd.ms-word.document.macroEnabled.12';
+
 @Injectable()
 export class DocGeneratorService {
   private readonly baseUrl: string;
   private readonly backendBaseUrl: string;
 
-  constructor(private readonly configService: ConfigService) {
-    this.baseUrl = this.configService
-      .get<string>('THESIS_DOC_GENERATOR_URL', 'http://127.0.0.1:8001')
-      .replace(/\/+$/, '');
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly databaseService: DatabaseService,
+  ) {
+    this.baseUrl = (
+      this.configService.get<string>('THESIS_DOC_GENERATOR_URL')?.trim() ||
+      'http://127.0.0.1:8000'
+    ).replace(/\/+$/, '');
     const port = String(this.configService.get<string | number>('PORT', 3000));
     this.backendBaseUrl = this.configService
       .get<string>('THESIS_BACKEND_URL', `http://127.0.0.1:${port}`)
       .replace(/\/+$/, '');
   }
 
-  getThesis(tesisId: string) {
+  async getThesis(tesisId: string, user: CurrentUser) {
+    await this.ensureThesisAccess(tesisId, user);
     return this.request(`/theses/${tesisId}`);
   }
 
-  listReferences(tesisId: string) {
+  async listReferences(tesisId: string, user: CurrentUser) {
+    await this.ensureThesisAccess(tesisId, user);
     return this.request(`/theses/${tesisId}/references`);
   }
 
-  createReference(tesisId: string, body: unknown) {
+  async createReference(tesisId: string, body: unknown, user: CurrentUser) {
+    await this.ensureThesisAccess(tesisId, user);
     return this.request(`/theses/${tesisId}/references`, {
       method: 'POST',
       body,
     });
   }
 
-  updateReference(referenceId: string, body: unknown) {
+  async updateReference(referenceId: string, body: unknown, user: CurrentUser) {
+    const tesisId = await this.getReferenceThesisId(referenceId);
+    await this.ensureThesisAccess(tesisId, user);
     return this.request(`/references/${referenceId}`, {
       method: 'PATCH',
       body,
     });
   }
 
-  deleteReference(referenceId: string) {
+  async deleteReference(referenceId: string, user: CurrentUser) {
+    const tesisId = await this.getReferenceThesisId(referenceId);
+    await this.ensureThesisAccess(tesisId, user);
     return this.request(`/references/${referenceId}`, { method: 'DELETE' });
   }
 
-  listIndex(tesisId: string) {
+  async listIndex(tesisId: string, user: CurrentUser) {
+    await this.ensureThesisAccess(tesisId, user);
     return this.request(`/theses/${tesisId}/sections`);
   }
 
-  createIndexSection(tesisId: string, body: unknown) {
+  async createIndexSection(tesisId: string, body: unknown, user: CurrentUser) {
+    await this.ensureThesisAccess(tesisId, user);
     return this.request(`/theses/${tesisId}/sections`, {
       method: 'POST',
       body,
     });
   }
 
-  replaceIndex(tesisId: string, body: unknown) {
+  async replaceIndex(tesisId: string, body: unknown, user: CurrentUser) {
+    await this.ensureThesisAccess(tesisId, user);
     return this.request(`/theses/${tesisId}/sections`, {
       method: 'PUT',
       body,
     });
   }
 
-  updateIndexSection(tesisId: string, sectionId: string, body: unknown) {
+  async updateIndexSection(
+    tesisId: string,
+    sectionId: string,
+    body: unknown,
+    user: CurrentUser,
+  ) {
+    await this.ensureThesisAccess(tesisId, user);
     return this.request(`/theses/${tesisId}/sections/${sectionId}`, {
       method: 'PATCH',
       body,
     });
   }
 
-  deleteIndexSection(tesisId: string, sectionId: string) {
+  async appendIndexSectionText(
+    tesisId: string,
+    sectionId: string,
+    body: unknown,
+    user: CurrentUser,
+  ) {
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/theses/${tesisId}/sections/${sectionId}/append-text`, {
+      method: 'POST',
+      body,
+    });
+  }
+
+  async deleteIndexSection(tesisId: string, sectionId: string, user: CurrentUser) {
+    await this.ensureThesisAccess(tesisId, user);
     return this.request(`/theses/${tesisId}/sections/${sectionId}`, {
       method: 'DELETE',
     });
   }
 
-  generateDocx(tesisId: string, options: GenerateDocxOptions = {}) {
+  async applyFormatSkeleton(
+    tesisId: string,
+    skeletonSections: Array<{
+      title: string;
+      level: number;
+      order: number;
+      required: boolean;
+    }>,
+    user: CurrentUser,
+  ) {
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/theses/${tesisId}/sections/from-skeleton`, {
+      method: 'POST',
+      body: { sections: skeletonSections },
+    });
+  }
+
+  async generateDocx(
+    tesisId: string,
+    options: GenerateDocxOptions = {},
+    user?: CurrentUser,
+  ) {
+    if (user) {
+      await this.ensureThesisAccess(tesisId, user);
+    }
+
     const headers: Record<string, string> = {};
 
     if (options.authorization) {
@@ -103,15 +169,150 @@ export class DocGeneratorService {
     return this.request(`/theses/${tesisId}/documents/docx`, {
       method: 'POST',
       headers,
-      body: options.uploadToBackend
-        ? { upload_to_backend: true }
-        : undefined,
+      body: options.uploadToBackend ? { upload_to_backend: true } : undefined,
     }).then((payload) =>
       this.withBackendDownloadUrl(payload, `/ai/tesis/documentos`),
     );
   }
 
-  async downloadDocument(filename: string) {
+  async getMetadataHarness(documentId: string, user: CurrentUser) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/metadata-harness`);
+  }
+
+  async getRawData(documentId: string, user: CurrentUser) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/raw-data`);
+  }
+
+  async getRawDocument(documentId: string, user: CurrentUser) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/raw-document`);
+  }
+
+  async updateRawData(documentId: string, body: unknown, user: CurrentUser) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/raw-data`, {
+      method: 'PATCH',
+      body,
+    });
+  }
+
+  async extractRawData(documentId: string, user: CurrentUser) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/raw-data/extract`, {
+      method: 'POST',
+    });
+  }
+
+  async extractOutline(documentId: string, user: CurrentUser) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/outline/extract`, { method: 'POST' });
+  }
+
+  async processDocument(documentId: string, user: CurrentUser) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/process`, { method: 'POST' });
+  }
+
+  async listSections(documentId: string, user: CurrentUser) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/sections`);
+  }
+
+  async getSection(documentId: string, sectionId: string, user: CurrentUser) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/sections/${sectionId}`);
+  }
+
+  async updateSection(
+    documentId: string,
+    sectionId: string,
+    body: unknown,
+    user: CurrentUser,
+  ) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/sections/${sectionId}`, {
+      method: 'PATCH',
+      body,
+    });
+  }
+
+  async listDocumentReferences(documentId: string, user: CurrentUser) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/references`);
+  }
+
+  async getDocumentReference(
+    documentId: string,
+    referenceId: string,
+    user: CurrentUser,
+  ) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/references/${referenceId}`);
+  }
+
+  async updateDocumentReference(
+    documentId: string,
+    referenceId: string,
+    body: unknown,
+    user: CurrentUser,
+  ) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/references/${referenceId}`, {
+      method: 'PATCH',
+      body,
+    });
+  }
+
+  async getPreview(documentId: string, user: CurrentUser) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/preview`);
+  }
+
+  async insertCitation(documentId: string, body: unknown, user: CurrentUser) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/citations`, {
+      method: 'POST',
+      body,
+    });
+  }
+
+  async insertHeading(documentId: string, body: unknown, user: CurrentUser) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/headings`, {
+      method: 'POST',
+      body,
+    });
+  }
+
+  async insertSubtitle(documentId: string, body: unknown, user: CurrentUser) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(`/documents/${documentId}/subtitles`, {
+      method: 'POST',
+      body,
+    });
+  }
+
+  async downloadDocument(filename: string, user: CurrentUser) {
+    await this.ensureDocumentFilenameAccess(filename, user);
     let response: Response;
     try {
       response = await fetch(
@@ -135,7 +336,7 @@ export class DocGeneratorService {
     return new StreamableFile(stream, {
       type:
         response.headers.get('content-type') ||
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        this.wordMimeType(filename),
       disposition: `attachment; filename="${filename}"`,
     });
   }
@@ -188,5 +389,85 @@ export class DocGeneratorService {
       ...payload,
       backend_download_url: `${prefix}/${encodeURIComponent(filename)}`,
     };
+  }
+
+  private wordMimeType(filename: string) {
+    return filename.toLowerCase().endsWith('.docm') ? DOCM_MIME : DOCX_MIME;
+  }
+
+  private async ensureThesisAccess(tesisId: string, user: CurrentUser) {
+    const result = await this.databaseService.query(
+      `SELECT 1
+       FROM "AT".tesis t
+       WHERE t.id = $1
+         AND t.eliminado_en IS NULL
+         AND (
+           t.estudiante_id = $2
+           OR EXISTS (
+             SELECT 1 FROM "AT".asesores_tesis at
+             WHERE at.tesis_id = t.id AND at.asesor_id = $2 AND at.activo = true
+           )
+           OR $3 = 'admin'
+         )
+       LIMIT 1`,
+      [tesisId, user.usuario_id, user.rol],
+    );
+
+    if (!result.rows[0]) {
+      throw new NotFoundException('Tesis no encontrada');
+    }
+  }
+
+  private async getReferenceThesisId(referenceId: string) {
+    const result = await this.databaseService.query<{ tesis_id: string }>(
+      `SELECT tesis_id
+       FROM "AT".tesis_references
+       WHERE id = $1 AND deleted_at IS NULL
+       LIMIT 1`,
+      [referenceId],
+    );
+
+    const tesisId = result.rows[0]?.tesis_id;
+    if (!tesisId) {
+      throw new NotFoundException('Referencia no encontrada');
+    }
+    return tesisId;
+  }
+
+  private async getDocumentThesisId(documentId: string) {
+    const result = await this.databaseService.query<{ tesis_id: string }>(
+      `SELECT tesis_id
+       FROM "AT".documentos_tesis
+       WHERE id = $1
+       LIMIT 1`,
+      [documentId],
+    );
+
+    const tesisId = result.rows[0]?.tesis_id;
+    if (!tesisId) {
+      throw new NotFoundException('Documento no encontrado');
+    }
+    return tesisId;
+  }
+
+  private async ensureDocumentFilenameAccess(
+    filename: string,
+    user: CurrentUser,
+  ) {
+    const result = await this.databaseService.query<{ tesis_id: string }>(
+      `SELECT d.tesis_id
+       FROM "AT".documentos_tesis d
+       WHERE d.nombre_archivo = $1
+       ORDER BY d.creado_en DESC
+       LIMIT 1`,
+      [filename],
+    );
+
+    const tesisId = result.rows[0]?.tesis_id;
+    if (!tesisId) {
+      throw new NotFoundException('Documento no encontrado');
+    }
+
+    await this.ensureThesisAccess(tesisId, user);
   }
 }

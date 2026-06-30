@@ -15,6 +15,11 @@ export class CatalogosController {
     return this.catalogosService.tiposTesisPorPlan(planId);
   }
 
+  @Get('doc-thesis-formats')
+  docThesisFormats() {
+    return this.catalogosService.docThesisFormats();
+  }
+
   @Get('universidades')
   universidades() {
     return this.catalogosService.universidades();

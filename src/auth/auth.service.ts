@@ -3,7 +3,6 @@ import {
   Injectable,
   InternalServerErrorException,
   Logger,
-  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -41,14 +40,7 @@ export class AuthService {
 
   async register(dto: RegisterDto) {
     try {
-      if (!this.emailService.isConfigured()) {
-        throw new ServiceUnavailableException(
-          'El servicio de correo no está configurado. No se puede crear la cuenta sin enviar el enlace de verificación.',
-        );
-      }
-
       const password = dto.contrasena ?? 'app_theseis';
-      await this.ensureEmailVerificationTable();
       const usuario = await this.databaseService.withTransaction(
         async (client) => {
           const authResult = await client.query<{
@@ -76,25 +68,16 @@ export class AuthService {
           };
         },
       );
-      const verification = await this.createEmailVerificationToken(
-        usuario.auth_usuario_id,
-      );
-      const emailResult = await this.emailService.sendVerificationEmail({
-        to: usuario.email,
-        verificationUrl: verification.url,
-      });
-      if (!emailResult.ok) {
-        await this.deleteCreatedRegistration(usuario.auth_usuario_id);
-        throw new ServiceUnavailableException(
-          'No se pudo enviar el correo de verificación. La cuenta no fue creada.',
-        );
-      }
+
+      const verification = await this.createVerificationForRegistration(usuario);
 
       return {
         ok: true,
-        message:
-          'Usuario creado correctamente. Revisa tu correo para verificar la cuenta.',
-        email_sent: true,
+        message: verification.emailSent
+          ? 'Usuario creado correctamente. Revisa tu correo para verificar la cuenta.'
+          : 'Usuario creado correctamente. La verificación por correo está desactivada temporalmente.',
+        email_sent: verification.emailSent,
+        email_required: false,
         usuario: this.publicUser(usuario),
         verification_url: verification.devUrl,
       };
@@ -102,9 +85,6 @@ export class AuthService {
       this.logger.error('Error al registrar usuario', error);
       if (this.isPgError(error, '23505')) {
         throw new BadRequestException('El email ya está registrado');
-      }
-      if (error instanceof ServiceUnavailableException) {
-        throw error;
       }
       throw new InternalServerErrorException('No se pudo crear el usuario');
     }
@@ -404,11 +384,7 @@ export class AuthService {
       [authUsuarioId, tokenHash],
     );
 
-    const frontendUrl = (
-      process.env.FRONTEND_URL ||
-      process.env.APP_URL ||
-      'http://localhost:5173'
-    ).replace(/\/$/, '');
+    const frontendUrl = this.getFrontendBaseUrl();
     const url = `${frontendUrl}/#/verify-email?token=${token}`;
 
     return {
@@ -417,25 +393,46 @@ export class AuthService {
     };
   }
 
-  private async deleteCreatedRegistration(authUsuarioId: string) {
-    await this.databaseService.withTransaction(async (client) => {
-      await client.query(
-        `DELETE FROM "AT".email_verification_tokens
-         WHERE auth_usuario_id = $1`,
-        [authUsuarioId],
+  private getFrontendBaseUrl() {
+    const configuredUrl =
+      process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:5173';
+    return configuredUrl.split(',')[0].trim().replace(/\/$/, '');
+  }
+
+  private async createVerificationForRegistration(
+    usuario: UserRow & { email: string },
+  ) {
+    if (!this.emailService.isConfigured()) {
+      this.logger.warn(
+        `Registro creado sin correo de verificación: falta RESEND_API_KEY. Email=${usuario.email}`,
       );
-      await client.query(
-        `DELETE FROM "AT".usuarios
-         WHERE auth_usuario_id = $1`,
-        [authUsuarioId],
+      return { emailSent: false, devUrl: undefined };
+    }
+
+    try {
+      await this.ensureEmailVerificationTable();
+      const verification = await this.createEmailVerificationToken(
+        usuario.auth_usuario_id,
       );
-      await client.query(
-        `DELETE FROM "AT".auth_usuarios
-         WHERE id = $1
-           AND email_verificado = false
-           AND ultimo_login_en IS NULL`,
-        [authUsuarioId],
+      const emailResult = await this.emailService.sendVerificationEmail({
+        to: usuario.email,
+        verificationUrl: verification.url,
+      });
+
+      if (!emailResult.ok) {
+        this.logger.warn(
+          `Registro creado, pero no se pudo enviar el correo de verificación. Email=${usuario.email}`,
+        );
+        return { emailSent: false, devUrl: verification.devUrl };
+      }
+
+      return { emailSent: true, devUrl: verification.devUrl };
+    } catch (error) {
+      this.logger.warn(
+        `Registro creado, pero falló la preparación del correo de verificación. Email=${usuario.email}`,
+        error,
       );
-    });
+      return { emailSent: false, devUrl: undefined };
+    }
   }
 }

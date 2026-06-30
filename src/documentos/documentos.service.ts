@@ -3,11 +3,17 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { DatabaseService } from '../database/database.service';
 import { GoogleService } from '../google/google.service';
+import { LocalStorageService } from '../storage/local-storage.service';
 import { ActualizarRevisionDocumentoDto } from './dto/actualizar-revision-documento.dto';
 import { RegistrarDocumentoDto } from './dto/registrar-documento.dto';
+
+const DOCX_MIME =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const DOCM_MIME = 'application/vnd.ms-word.document.macroEnabled.12';
 
 const TIPOS_DOCUMENTO_ESTUDIANTE = [
   'reglamento',
@@ -28,6 +34,8 @@ export class DocumentosService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly googleService: GoogleService,
+    private readonly localStorageService: LocalStorageService,
+    private readonly configService: ConfigService,
   ) {}
 
   private normalizarTipoDocumentoEstudiante(tipoDocumento?: string) {
@@ -172,12 +180,20 @@ export class DocumentosService {
     });
 
     if (esDocumentoTesis) {
+      const isEditableWord = this.isEditableWordFile(file, driveFile.mimeType);
+      const localCopy = isEditableWord
+        ? await this.localStorageService.saveFile(file, {
+            directory: `tesis/${tesisId}/avances`,
+            fileNamePrefix: `avance-v${nextVersion}`,
+          })
+        : null;
+
       const inserted = await this.databaseService.query(
         `INSERT INTO "AT".documentos_tesis
            (tesis_id, subido_por, nombre_archivo, url_archivo_drive,
             documento_drive_id, version, estado_revision, comentario_revision,
-            tipo_mime, tamano_bytes)
-         VALUES ($1, $2, $3, $4, $5, $6, 'pendiente', null, $7, $8)
+            ruta_storage, tipo_mime, tamano_bytes, processing_status, raw_data_json)
+         VALUES ($1, $2, $3, $4, $5, $6, 'pendiente', null, $7, $8, $9, 'pending', '{}'::jsonb)
          RETURNING *`,
         [
           tesisId,
@@ -186,12 +202,21 @@ export class DocumentosService {
           driveFile.webViewLink ?? null,
           driveFile.id,
           nextVersion,
+          localCopy?.absolutePath ?? null,
           file.mimetype || driveFile.mimeType || null,
           file.size,
         ],
       );
 
-      return this.uploadResponse(inserted.rows[0], driveFile, driveUser);
+      const structuredExtraction =
+        localCopy && isEditableWord
+          ? await this.extractStructuredDocument(inserted.rows[0]?.id, tesisId)
+          : null;
+      const uploadedDocument = structuredExtraction
+        ? { ...inserted.rows[0], ...structuredExtraction }
+        : inserted.rows[0];
+
+      return this.uploadResponse(uploadedDocument, driveFile, driveUser);
     }
 
     const inserted = await this.databaseService.query(
@@ -346,6 +371,215 @@ export class DocumentosService {
     );
 
     return Number(result.rows[0]?.version || 0) + 1;
+  }
+
+  private isEditableWordFile(
+    file: Express.Multer.File,
+    driveMimeType?: string | null,
+  ) {
+    const filename = (file.originalname || '').toLowerCase();
+    const mimeType = file.mimetype || driveMimeType || '';
+
+    return (
+      filename.endsWith('.docx') ||
+      filename.endsWith('.docm') ||
+      mimeType === DOCX_MIME ||
+      mimeType === DOCM_MIME
+    );
+  }
+
+  private async extractStructuredDocument(
+    documentId: string | undefined,
+    tesisId?: string,
+  ) {
+    if (!documentId) {
+      return {
+        ok: false,
+        error: 'No se pudo identificar el documento para procesarlo',
+      };
+    }
+
+    const baseUrl = (
+      this.configService.get<string>('THESIS_DOC_GENERATOR_URL')?.trim() ||
+      'http://127.0.0.1:8000'
+    ).replace(/\/+$/, '');
+
+    try {
+      const response = await fetch(
+        `${baseUrl}/documents/${encodeURIComponent(documentId)}/process`,
+        { method: 'POST' },
+      );
+      const payload = await this.parseJsonResponse(response);
+
+      if (!response.ok) {
+        await this.marcarProcesamientoDocumento(
+          documentId,
+          'error',
+          payload?.detail || 'No se pudo procesar el documento DOCX',
+        );
+        return {
+          ok: false,
+          status: response.status,
+          error: payload?.detail || 'No se pudo procesar el documento DOCX',
+        };
+      }
+
+      const sections = Array.isArray(payload?.sections) ? payload.sections : [];
+      const references = Array.isArray(payload?.references)
+        ? payload.references
+        : [];
+      return {
+        ok: true,
+        ...payload,
+        reference_extraction: {
+          ok: true,
+          document_id: documentId,
+          tesis_id: tesisId ?? null,
+          extracted_count: references.length,
+          created_count: references.length,
+          skipped_count: 0,
+          references: references.map((reference: Record<string, unknown>) => ({
+            id: reference.id ?? null,
+            title: String(reference.title || ''),
+            year: reference.year ?? null,
+            type: String(reference.type || 'reference'),
+            source: String(reference.source || 'text'),
+            status: 'created',
+          })),
+        },
+        outline_extraction: {
+          ok: true,
+          document_id: documentId,
+          tesis_id: tesisId ?? null,
+          extracted_count: sections.length,
+          created_count: sections.length,
+          updated_count: 0,
+          skipped_count: 0,
+          sections: sections.map((section: Record<string, unknown>) => ({
+            id: section.id ?? null,
+            title: String(section.heading || ''),
+            level: section.level ?? 1,
+            order: section.order_index ?? 0,
+            source: 'heading',
+            status: 'created',
+            subtitles: [],
+          })),
+        },
+      };
+    } catch (error) {
+      await this.marcarProcesamientoDocumento(
+        documentId,
+        'error',
+        error instanceof Error ? error.message : 'No se pudo procesar el documento DOCX',
+      );
+      return {
+        ok: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : 'No se pudo procesar el documento DOCX',
+      };
+    }
+  }
+
+  private async marcarProcesamientoDocumento(
+    documentId: string,
+    status: 'processing' | 'processed' | 'error' | 'manual',
+    error?: string | null,
+  ) {
+    await this.databaseService.query(
+      `UPDATE "AT".documentos_tesis
+       SET processing_status = $2,
+           processing_error = $3,
+           actualizado_en = now()
+       WHERE id = $1`,
+      [documentId, status, error ?? null],
+    );
+  }
+
+  private async extractReferencesFromDocument(documentId: string | undefined) {
+    return this.extractFromDocument(
+      documentId,
+      'references',
+      'referencias',
+      'No se pudieron extraer referencias',
+    );
+  }
+
+  private async extractOutlineFromDocument(documentId: string | undefined) {
+    return this.extractFromDocument(
+      documentId,
+      'outline',
+      'títulos y subtítulos',
+      'No se pudieron extraer títulos y subtítulos',
+    );
+  }
+
+  private async extractDocumentKnowledge(documentId: string | undefined) {
+    const [referenceExtraction, outlineExtraction] = await Promise.all([
+      this.extractReferencesFromDocument(documentId),
+      this.extractOutlineFromDocument(documentId),
+    ]);
+
+    return {
+      reference_extraction: referenceExtraction,
+      outline_extraction: outlineExtraction,
+    };
+  }
+
+  private async extractFromDocument(
+    documentId: string | undefined,
+    resource: 'references' | 'outline',
+    label: string,
+    fallbackError: string,
+  ) {
+    if (!documentId) {
+      return {
+        ok: false,
+        error: `No se pudo identificar el documento para extraer ${label}`,
+      };
+    }
+    const baseUrl = (
+      this.configService.get<string>('THESIS_DOC_GENERATOR_URL')?.trim() ||
+      'http://127.0.0.1:8000'
+    ).replace(/\/+$/, '');
+
+    try {
+      const response = await fetch(
+        `${baseUrl}/documents/${encodeURIComponent(documentId)}/${resource}/extract`,
+        { method: 'POST' },
+      );
+      const payload = await this.parseJsonResponse(response);
+
+      if (!response.ok) {
+        return {
+          ok: false,
+          status: response.status,
+          error: payload?.detail || fallbackError,
+        };
+      }
+
+      return { ok: true, ...payload };
+    } catch (error) {
+      return {
+        ok: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : fallbackError,
+      };
+    }
+  }
+
+  private async parseJsonResponse(response: Response) {
+    const text = await response.text();
+    if (!text) return null;
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { detail: text };
+    }
   }
 
   private uploadResponse(

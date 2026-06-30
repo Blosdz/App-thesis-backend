@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -10,9 +11,15 @@ import { DatabaseService } from '../database/database.service';
 import { DocGeneratorService } from '../doc-generator/doc-generator.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlanesService } from '../planes/planes.service';
+import { LocalStorageService } from '../storage/local-storage.service';
+import { ActualizarFormatoDocTesisDto } from './dto/actualizar-formato-doc-tesis.dto';
 import { ActualizarEstadoTesisDto } from './dto/actualizar-estado-tesis.dto';
 import { AsignarAsesorDto } from './dto/asignar-asesor.dto';
 import { CrearTesisConPlanDto, CrearTesisDto } from './dto/crear-tesis.dto';
+
+const DOCX_MIME =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const PDF_MIME = 'application/pdf';
 
 @Injectable()
 export class TesisService {
@@ -21,6 +28,7 @@ export class TesisService {
     private readonly planesService: PlanesService,
     private readonly notificationsService: NotificationsService,
     private readonly docGeneratorService: DocGeneratorService,
+    private readonly localStorageService: LocalStorageService,
   ) {}
 
   async crear(user: CurrentUser, dto: CrearTesisDto) {
@@ -185,10 +193,17 @@ export class TesisService {
 
   async misTesis(user: CurrentUser) {
     const result = await this.databaseService.query(
-      `SELECT t.*, tt.nombre AS tipo_tesis_nombre, p.nombre AS plan_nombre
+      `SELECT
+         t.*,
+         tt.nombre AS tipo_tesis_nombre,
+         p.nombre AS plan_nombre,
+         dtf.uname AS doc_thesis_format,
+         dtf.name AS doc_thesis_format_name,
+         dtf.citation_type
        FROM "AT".tesis t
        LEFT JOIN "AT".tipos_tesis tt ON tt.id = t.tipo_tesis_id
        LEFT JOIN "AT".planes p ON p.id = t.plan_id
+       LEFT JOIN "AT".doc_thesis_formats dtf ON dtf.id = t.doc_thesis_format_id
        WHERE t.estudiante_id = $1
          AND t.eliminado_en IS NULL
        ORDER BY t.creado_en DESC`,
@@ -201,8 +216,12 @@ export class TesisService {
     const result = await this.databaseService.query(
       `SELECT
          t.*,
+         dtf.uname AS doc_thesis_format,
+         dtf.name AS doc_thesis_format_name,
+         dtf.citation_type,
          COALESCE(asesores_resumen.asesores, '[]'::jsonb) AS asesores
        FROM "AT".tesis t
+       LEFT JOIN "AT".doc_thesis_formats dtf ON dtf.id = t.doc_thesis_format_id
        LEFT JOIN (
          SELECT
            at.tesis_id,
@@ -258,8 +277,15 @@ export class TesisService {
 
   async obtenerDetalle(user: CurrentUser, tesisId: string) {
     const result = await this.databaseService.query(
-      `SELECT t.*
+      `SELECT
+         t.*,
+         dtf.uname AS doc_thesis_format,
+         dtf.name AS doc_thesis_format_name,
+         dtf.citation_type,
+         dtf.skeleton_json,
+         dtf.word_settings_json
        FROM "AT".tesis t
+       LEFT JOIN "AT".doc_thesis_formats dtf ON dtf.id = t.doc_thesis_format_id
        WHERE t.id = $1
          AND t.eliminado_en IS NULL
          AND (
@@ -304,6 +330,71 @@ export class TesisService {
       ok: true,
       message: 'Estado actualizado correctamente',
       data: result.rows[0],
+    };
+  }
+
+  async actualizarFormatoDoc(
+    user: CurrentUser,
+    tesisId: string,
+    dto: ActualizarFormatoDocTesisDto,
+  ) {
+    const docThesisFormat = dto.docThesisFormat.trim().toLowerCase();
+    const format = await this.databaseService.query(
+      `SELECT id, uname, name, citation_type, skeleton_json
+       FROM "AT".doc_thesis_formats
+       WHERE uname = $1
+         AND active = true
+       LIMIT 1`,
+      [docThesisFormat],
+    );
+
+    if (!format.rows[0]) {
+      throw new BadRequestException('Formato de tesis no válido');
+    }
+
+    const selectedFormat = format.rows[0];
+    const result = await this.databaseService.query(
+      `UPDATE "AT".tesis t
+       SET doc_thesis_format_id = $3,
+           metadata = jsonb_set(
+             jsonb_set(
+               COALESCE(t.metadata, '{}'::jsonb),
+               '{doc_thesis_format}',
+               to_jsonb($4::text),
+               true
+             ),
+             '{citation_style}',
+             to_jsonb($4::text),
+             true
+           ) || jsonb_build_object('citation_mode', $5::text),
+           actualizado_en = now()
+       WHERE t.id = $1
+         AND t.eliminado_en IS NULL
+         AND (t.estudiante_id = $2 OR $6 = 'admin')
+       RETURNING t.*`,
+      [
+        tesisId,
+        user.usuario_id,
+        selectedFormat.id,
+        selectedFormat.uname,
+        selectedFormat.citation_type,
+        user.rol,
+      ],
+    );
+
+    if (!result.rows[0]) {
+      throw new NotFoundException('Tesis no encontrada');
+    }
+
+    return {
+      ok: true,
+      message: 'Formato de tesis actualizado correctamente',
+      data: {
+        ...result.rows[0],
+        doc_thesis_format: selectedFormat.uname,
+        doc_thesis_format_name: selectedFormat.name,
+        citation_type: selectedFormat.citation_type,
+      },
     };
   }
 
@@ -378,6 +469,66 @@ export class TesisService {
       ok: true,
       message: 'Asesor asignado correctamente',
       data: asignacion,
+    };
+  }
+
+  async subirCaratula(
+    user: CurrentUser,
+    tesisId: string,
+    file: Express.Multer.File | undefined,
+  ) {
+    if (!file) {
+      throw new BadRequestException('Se requiere file');
+    }
+
+    const lowerName = (file.originalname || '').toLowerCase();
+    const isDocxFile = lowerName.endsWith('.docx');
+    const isPdfFile = lowerName.endsWith('.pdf');
+    const isSupportedMime =
+      !file.mimetype ||
+      (isDocxFile && file.mimetype === DOCX_MIME) ||
+      (isPdfFile && file.mimetype === PDF_MIME);
+    if ((!isDocxFile && !isPdfFile) || !isSupportedMime) {
+      throw new BadRequestException('La carátula debe ser un archivo DOCX o PDF');
+    }
+
+    const detalle = await this.obtenerDetalle(user, tesisId);
+    const tesis = detalle.data;
+    if (user.rol !== 'admin' && tesis.estudiante_id !== user.usuario_id) {
+      throw new ForbiddenException(
+        'Solo el estudiante propietario o un admin puede subir la carátula',
+      );
+    }
+
+    const saved = await this.localStorageService.saveFile(file, {
+      directory: `tesis/${tesisId}/caratula`,
+      fileNamePrefix: 'caratula',
+    });
+    const coverMetadata = {
+      cover_docx_url: saved.publicUrl,
+      cover_docx_storage_path: saved.relativePath,
+      cover_docx_original_name: saved.originalName,
+      cover_docx_mime_type: saved.mimeType,
+      cover_docx_size: saved.size,
+    };
+
+    const result = await this.databaseService.query(
+      `UPDATE "AT".tesis
+       SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+           actualizado_en = now()
+       WHERE id = $1
+         AND eliminado_en IS NULL
+       RETURNING metadata`,
+      [tesisId, coverMetadata],
+    );
+
+    return {
+      ok: true,
+      message: 'Carátula subida correctamente',
+      data: {
+        ...coverMetadata,
+        metadata: result.rows[0]?.metadata ?? coverMetadata,
+      },
     };
   }
 

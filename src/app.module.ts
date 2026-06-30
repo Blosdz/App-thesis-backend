@@ -24,6 +24,7 @@ import { DeepseekModule } from './deepseek/deepseek.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { CursosModule } from './cursos/cursos.module';
 import { DocGeneratorModule } from './doc-generator/doc-generator.module';
+import { ColmenaModule } from './colmena/colmena.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { DocGeneratorModule } from './doc-generator/doc-generator.module';
     NotificationsModule,
     CursosModule,
     DocGeneratorModule,
+    ColmenaModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -292,6 +292,26 @@ WHERE NOT EXISTS (
   WHERE tt.codigo = s.codigo
 );
 
+DO $$
+BEGIN
+  IF to_regclass('"AT".doc_thesis_formats') IS NOT NULL
+     AND EXISTS (
+       SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'AT'
+         AND table_name = 'tipos_tesis'
+         AND column_name = 'default_doc_thesis_format_id'
+     ) THEN
+    UPDATE "AT".tipos_tesis AS tt
+    SET
+      default_doc_thesis_format_id = f.id,
+      actualizado_en = now()
+    FROM "AT".doc_thesis_formats AS f
+    WHERE f.uname = 'apa7'
+      AND tt.default_doc_thesis_format_id IS NULL;
+  END IF;
+END $$;
+
 -- Precios por plan y tipo de tesis
 WITH seed (id, plan_id, tipo_tesis_codigo, precio_base) AS (
   VALUES

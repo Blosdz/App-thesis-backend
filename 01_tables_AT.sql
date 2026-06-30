@@ -366,6 +366,7 @@ CREATE TABLE "AT".documentos_tesis (
     ruta_storage text,
     tipo_mime character varying(100),
     tamano_bytes bigint,
+    raw_data text,
     CONSTRAINT documentos_tesis_pkey PRIMARY KEY (id),
     CONSTRAINT documentos_tesis_estado_revision_check CHECK (((estado_revision)::text = ANY ((ARRAY['pendiente'::character varying, 'aprobado'::character varying, 'rechazado'::character varying])::text[])))
 );
@@ -922,6 +923,7 @@ CREATE TABLE "AT".tipos_tesis (
     codigo character varying NOT NULL,
     nombre character varying NOT NULL,
     descripcion text,
+    default_doc_thesis_format_id uuid,
     activo boolean DEFAULT true,
     creado_en timestamp with time zone DEFAULT now(),
     actualizado_en timestamp with time zone DEFAULT now()
@@ -1050,10 +1052,6 @@ CREATE VIEW "AT".vw_log_validacion_sugerencia AS
 --
 -- PostgreSQL database dump complete
 --
-
-\unrestrict 5gJFp3D00Q4yJbB0brgAhl4cfUG6nevYxScv0hLzbbIPN0el6gruUiffS33feb3
-
-
 create table if not exists "AT".tesis_references (
     id uuid primary key default gen_random_uuid(),
 
@@ -1088,3 +1086,6 @@ where deleted_at is null;
 create index if not exists idx_tesis_contents_tesis_active
 on "AT".tesis_contents (tesis_id)
 where deleted_at is null;
+
+ALTER TABLE "AT".documentos_tesis
+ADD COLUMN IF NOT EXISTS raw_data text;
