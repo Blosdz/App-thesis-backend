@@ -21,6 +21,42 @@ type ChartBase64 = {
   data_base64: string;
 };
 
+type BaremoLevel = {
+  label: string;
+  min_value: number;
+  max_value: number;
+  severity_order: number;
+  interpretation: string | null;
+  source: string;
+  n: number;
+  percent: number;
+};
+
+type VariableBaremo = {
+  scoring_config_id: string;
+  scoring_config_name: string;
+  variable_label: string;
+  scoring_level: string;
+  score_min: number | null;
+  score_max: number | null;
+  baremo_source: string;
+  valid_n: number;
+  mean_score: number | null;
+  sd_score: number | null;
+  mean_level: string | null;
+  mean_interpretation: string | null;
+  levels: BaremoLevel[];
+  warnings: string[];
+};
+
+type BaremoResolution = {
+  form_id: string;
+  project_id: string;
+  resolved_variables: number;
+  items: VariableBaremo[];
+  warnings: string[];
+};
+
 @Injectable()
 export class ColmenaService {
   private readonly baseUrl: string;
@@ -97,6 +133,94 @@ export class ColmenaService {
     const result = await this.databaseService.query(
       `SELECT id, colmena_form_id, colmena_artifact_id, titulo, mime_type, creado_en
        FROM "AT".colmena_graficos_tesis
+       WHERE tesis_id = $1
+       ORDER BY creado_en DESC`,
+      [tesisId],
+    );
+    return result.rows;
+  }
+
+  // --- Baremos (proxy autenticado + persistencia) ---
+
+  getBaremoResolution(
+    formId: string,
+    levelsCount = 3,
+  ): Promise<BaremoResolution> {
+    return this.request(
+      `/api/v1/forms/${encodeURIComponent(
+        formId,
+      )}/scoring/baremos/resolution?levels_count=${levelsCount}`,
+    ) as Promise<BaremoResolution>;
+  }
+
+  async listFormBaremos(tesisId: string, formId: string, user: CurrentUser) {
+    await this.ensureThesisAccess(tesisId, user);
+    return this.getBaremoResolution(formId);
+  }
+
+  async importBaremoToThesis(
+    tesisId: string,
+    formId: string,
+    scoringConfigId: string,
+    user: CurrentUser,
+    title?: string,
+  ) {
+    await this.ensureThesisAccess(tesisId, user);
+    const resolution = await this.getBaremoResolution(formId);
+    const item = resolution.items.find(
+      (i) => i.scoring_config_id === scoringConfigId,
+    );
+    if (!item) {
+      throw new NotFoundException('Baremo no encontrado para este formulario');
+    }
+
+    const metadata = {
+      score_min: item.score_min,
+      score_max: item.score_max,
+      baremo_source: item.baremo_source,
+      valid_n: item.valid_n,
+      mean_score: item.mean_score,
+      sd_score: item.sd_score,
+      mean_level: item.mean_level,
+      mean_interpretation: item.mean_interpretation,
+      warnings: item.warnings,
+    };
+
+    const result = await this.databaseService.query<{ id: string }>(
+      `INSERT INTO "AT".colmena_baremos_tesis
+         (tesis_id, colmena_form_id, colmena_scoring_config_id, titulo, config_name,
+          variable_label, scoring_level, levels, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb)
+       RETURNING id`,
+      [
+        tesisId,
+        formId,
+        item.scoring_config_id,
+        title ?? null,
+        item.scoring_config_name,
+        item.variable_label,
+        item.scoring_level,
+        JSON.stringify(item.levels),
+        JSON.stringify(metadata),
+      ],
+    );
+
+    return {
+      id: result.rows[0]?.id,
+      tesis_id: tesisId,
+      colmena_form_id: formId,
+      colmena_scoring_config_id: item.scoring_config_id,
+      config_name: item.scoring_config_name,
+      variable_label: item.variable_label,
+    };
+  }
+
+  async listThesisBaremos(tesisId: string, user: CurrentUser) {
+    await this.ensureThesisAccess(tesisId, user);
+    const result = await this.databaseService.query(
+      `SELECT id, colmena_form_id, colmena_scoring_config_id, titulo, config_name,
+              variable_label, scoring_level, levels, creado_en
+       FROM "AT".colmena_baremos_tesis
        WHERE tesis_id = $1
        ORDER BY creado_en DESC`,
       [tesisId],

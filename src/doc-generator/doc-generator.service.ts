@@ -210,6 +210,22 @@ export class DocGeneratorService {
     });
   }
 
+  async extractSectionReferences(
+    documentId: string,
+    body: unknown,
+    user: CurrentUser,
+  ) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+    return this.request(
+      `/documents/${documentId}/references/extract-section`,
+      {
+        method: 'POST',
+        body,
+      },
+    );
+  }
+
   async extractOutline(documentId: string, user: CurrentUser) {
     const tesisId = await this.getDocumentThesisId(documentId);
     await this.ensureThesisAccess(tesisId, user);
@@ -308,6 +324,41 @@ export class DocGeneratorService {
     return this.request(`/documents/${documentId}/subtitles`, {
       method: 'POST',
       body,
+    });
+  }
+
+  async downloadEditableDocument(documentId: string, user: CurrentUser) {
+    const tesisId = await this.getDocumentThesisId(documentId);
+    await this.ensureThesisAccess(tesisId, user);
+
+    let response: Response;
+    try {
+      response = await fetch(
+        `${this.baseUrl}/documents/${encodeURIComponent(documentId)}/download`,
+      );
+    } catch (error) {
+      throw new BadGatewayException({
+        message: 'No se pudo descargar el documento desde thesis-doc-generator',
+        detail: error instanceof Error ? error.message : error,
+      });
+    }
+
+    if (!response.ok || !response.body) {
+      const payload = await this.parseResponse(response);
+      throw new HttpException(payload, response.status);
+    }
+
+    const contentDisposition =
+      response.headers.get('content-disposition') ||
+      `attachment; filename="documento.docx"`;
+    const stream = Readable.fromWeb(
+      response.body as unknown as NodeReadableStream<Uint8Array>,
+    );
+    return new StreamableFile(stream, {
+      type:
+        response.headers.get('content-type') ||
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      disposition: contentDisposition,
     });
   }
 

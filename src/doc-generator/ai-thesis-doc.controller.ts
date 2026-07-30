@@ -184,6 +184,19 @@ export class AiThesisDocController {
     return this.docGeneratorService.extractOutline(documentoId, user);
   }
 
+  @Post('documentos/:documentoId/references/extract-section')
+  extractSectionReferences(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('documentoId') documentoId: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.docGeneratorService.extractSectionReferences(
+      documentoId,
+      body,
+      user,
+    );
+  }
+
   @Get('documentos/:documentoId/sections')
   listSections(
     @CurrentUserDecorator() user: CurrentUser,
@@ -298,6 +311,14 @@ export class AiThesisDocController {
       { uploadToBackend: true, authorization },
       user,
     );
+  }
+
+  @Get('documentos/:documentoId/download')
+  downloadEditableDocument(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('documentoId') documentoId: string,
+  ) {
+    return this.docGeneratorService.downloadEditableDocument(documentoId, user);
   }
 
   @Get('documentos/:filename')

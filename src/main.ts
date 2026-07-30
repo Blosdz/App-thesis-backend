@@ -15,7 +15,11 @@ async function bootstrap() {
   app.useStaticAssets(storageRoot, { prefix: '/storage/' });
   app.enableCors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (
+        !origin ||
+        allowedOrigins.includes(origin) ||
+        /\.trycloudflare\.com$/.test(new URL(origin).hostname)
+      ) {
         callback(null, true);
         return;
       }

@@ -43,4 +43,37 @@ export class ColmenaController {
       body.titulo,
     );
   }
+
+  @Get(':tesisId/forms/:formId/baremos')
+  listFormBaremos(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('tesisId') tesisId: string,
+    @Param('formId') formId: string,
+  ) {
+    return this.colmenaService.listFormBaremos(tesisId, formId, user);
+  }
+
+  @Get(':tesisId/baremos')
+  listThesisBaremos(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('tesisId') tesisId: string,
+  ) {
+    return this.colmenaService.listThesisBaremos(tesisId, user);
+  }
+
+  @Post(':tesisId/baremos/import')
+  importBaremo(
+    @CurrentUserDecorator() user: CurrentUser,
+    @Param('tesisId') tesisId: string,
+    @Body()
+    body: { form_id: string; scoring_config_id: string; titulo?: string },
+  ) {
+    return this.colmenaService.importBaremoToThesis(
+      tesisId,
+      body.form_id,
+      body.scoring_config_id,
+      user,
+      body.titulo,
+    );
+  }
 }
