@@ -49,4 +49,14 @@ BEGIN
         ALTER TABLE "AT".planes_tipos_tesis_precios
             ADD CONSTRAINT planes_tipos_tesis_precios_pkey PRIMARY KEY (id);
     END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'pagos_pkey'
+          AND conrelid = '"AT".pagos'::regclass
+    ) THEN
+        ALTER TABLE "AT".pagos
+            ADD CONSTRAINT pagos_pkey PRIMARY KEY (id);
+    END IF;
 END $$;
