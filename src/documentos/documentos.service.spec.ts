@@ -75,8 +75,8 @@ describe('DocumentosService thesis uploads', () => {
     jest.restoreAllMocks();
   });
 
-  it('stores a local editable copy for Word thesis progress uploads', async () => {
-    const { databaseService, localStorageService, service } = makeService([
+  it('stores and processes Word thesis progress locally without Google Drive', async () => {
+    const { databaseService, googleService, localStorageService, service } = makeService([
       [
         {
           id: 'tesis-1',
@@ -224,9 +224,10 @@ describe('DocumentosService thesis uploads', () => {
       'http://127.0.0.1:8000/documents/doc-1/process',
       { method: 'POST' },
     );
+    expect(googleService.uploadFileToDrive).not.toHaveBeenCalled();
   });
 
-  it('does not store a local editable copy for PDF thesis progress uploads', async () => {
+  it('stores non-editable thesis files locally without processing or Google Drive', async () => {
     const { databaseService, googleService, localStorageService, service } =
       makeService([
         [
@@ -246,22 +247,23 @@ describe('DocumentosService thesis uploads', () => {
           },
         ],
       ]);
-    googleService.uploadFileToDrive.mockResolvedValueOnce({
-      id: 'drive-file-1',
-      webViewLink: 'https://drive.test/file',
-      mimeType: pdfMime,
-    });
     const fetchMock = jest.spyOn(global, 'fetch');
 
     await service.subirArchivo(user, 'tesis-1', makeFile('avance.pdf', pdfMime), {
       modo: 'tesis',
     });
 
-    expect(localStorageService.saveFile).not.toHaveBeenCalled();
+    expect(localStorageService.saveFile).toHaveBeenCalled();
+    expect(googleService.uploadFileToDrive).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(databaseService.query).toHaveBeenLastCalledWith(
       expect.stringContaining('ruta_storage'),
-      expect.arrayContaining([null, pdfMime, 4]),
+      expect.arrayContaining([
+        '/tmp/storage/tesis/tesis-1/avances/avance-v1.docx',
+        pdfMime,
+        4,
+        'manual',
+      ]),
     );
   });
 });

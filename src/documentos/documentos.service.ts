@@ -154,6 +154,55 @@ export class DocumentosService {
       : this.normalizarTipoDocumentoEstudiante(tipoDocumento);
 
     let tesis = await this.obtenerTesisAutorizada(user, tesisId);
+
+    if (esDocumentoTesis) {
+      const nextVersion = await this.obtenerSiguienteVersion(tesisId);
+      const isEditableWord = this.isEditableWordFile(file);
+      const localCopy = await this.localStorageService.saveFile(file, {
+        directory: `tesis/${tesisId}/avances`,
+        fileNamePrefix: `avance-v${nextVersion}`,
+      });
+
+      const inserted = await this.databaseService.query(
+        `INSERT INTO "AT".documentos_tesis
+           (tesis_id, subido_por, nombre_archivo, url_archivo_drive,
+            documento_drive_id, version, estado_revision, comentario_revision,
+            ruta_storage, tipo_mime, tamano_bytes, processing_status, raw_data_json)
+         VALUES ($1, $2, $3, null, null, $4, 'pendiente', null, $5, $6, $7, $8, '{}'::jsonb)
+         RETURNING *`,
+        [
+          tesisId,
+          user.usuario_id,
+          file.originalname,
+          nextVersion,
+          localCopy.absolutePath,
+          file.mimetype || null,
+          file.size,
+          isEditableWord ? 'pending' : 'manual',
+        ],
+      );
+
+      const structuredExtraction = isEditableWord
+        ? await this.extractStructuredDocument(inserted.rows[0]?.id, tesisId)
+        : null;
+      const uploadedDocument = structuredExtraction
+        ? { ...inserted.rows[0], ...structuredExtraction }
+        : inserted.rows[0];
+
+      return {
+        ok: true,
+        message: 'Documento guardado y procesado localmente',
+        data: {
+          ...uploadedDocument,
+          local_url: localCopy.publicUrl,
+        },
+        storage: {
+          provider: 'local',
+          path: localCopy.relativePath,
+        },
+      };
+    }
+
     if (!tesis.carpeta_drive_id) {
       await this.crearCarpetaDrive(user, tesisId);
       tesis = await this.obtenerTesisAutorizada(user, tesisId);
@@ -163,14 +212,11 @@ export class DocumentosService {
       throw new BadRequestException('No se pudo determinar carpeta Drive');
     }
 
-    const nextVersion =
-      esDocumentoTesis ? await this.obtenerSiguienteVersion(tesisId) : 1;
     const extension = file.originalname.includes('.')
       ? file.originalname.split('.').pop()
       : 'bin';
     const safeTitle = this.googleService.normalizeName(tesis.titulo, 'tesis');
-    const suffix =
-      esDocumentoTesis ? `_v${nextVersion}` : `_${tipoDocumentoNormalizado}`;
+    const suffix = `_${tipoDocumentoNormalizado}`;
     const driveFileName = `${safeTitle}${suffix}.${extension}`;
     const driveUser = await this.googleService.getDriveUser();
     const driveFile = await this.googleService.uploadFileToDrive({
@@ -178,46 +224,6 @@ export class DocumentosService {
       folderId: tesis.carpeta_drive_id,
       fileName: driveFileName,
     });
-
-    if (esDocumentoTesis) {
-      const isEditableWord = this.isEditableWordFile(file, driveFile.mimeType);
-      const localCopy = isEditableWord
-        ? await this.localStorageService.saveFile(file, {
-            directory: `tesis/${tesisId}/avances`,
-            fileNamePrefix: `avance-v${nextVersion}`,
-          })
-        : null;
-
-      const inserted = await this.databaseService.query(
-        `INSERT INTO "AT".documentos_tesis
-           (tesis_id, subido_por, nombre_archivo, url_archivo_drive,
-            documento_drive_id, version, estado_revision, comentario_revision,
-            ruta_storage, tipo_mime, tamano_bytes, processing_status, raw_data_json)
-         VALUES ($1, $2, $3, $4, $5, $6, 'pendiente', null, $7, $8, $9, 'pending', '{}'::jsonb)
-         RETURNING *`,
-        [
-          tesisId,
-          user.usuario_id,
-          file.originalname,
-          driveFile.webViewLink ?? null,
-          driveFile.id,
-          nextVersion,
-          localCopy?.absolutePath ?? null,
-          file.mimetype || driveFile.mimeType || null,
-          file.size,
-        ],
-      );
-
-      const structuredExtraction =
-        localCopy && isEditableWord
-          ? await this.extractStructuredDocument(inserted.rows[0]?.id, tesisId)
-          : null;
-      const uploadedDocument = structuredExtraction
-        ? { ...inserted.rows[0], ...structuredExtraction }
-        : inserted.rows[0];
-
-      return this.uploadResponse(uploadedDocument, driveFile, driveUser);
-    }
 
     const inserted = await this.databaseService.query(
       `INSERT INTO "AT".estudiante_documentos
