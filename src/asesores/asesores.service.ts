@@ -298,7 +298,7 @@ export class AsesoresService {
       id: string;
       asesor_id: string;
     }>(
-      `SELECT id, asesor_id
+      `SELECT cpa.id, cpa.asesor_id
        FROM "AT".codigos_publicos_asesor cpa
        JOIN "AT".usuarios u ON u.id = cpa.asesor_id
        WHERE upper(cpa.codigo_publico) = upper($1)
@@ -693,18 +693,6 @@ export class AsesoresService {
           throw new NotFoundException('Relación no encontrada');
         }
 
-        const tesisResult = await client.query(
-          this.buildTesisActivaSql('WHERE t.estudiante_id = $1'),
-          [relacion.estudiante_id],
-        );
-        const tesis = tesisResult.rows[0];
-
-        if (!tesis) {
-          throw new BadRequestException(
-            'El estudiante no tiene una tesis activa para vincular',
-          );
-        }
-
         await client.query(
           `UPDATE "AT".relaciones_asesor_estudiante
            SET estado = 'activo', actualizado_en = now()
@@ -712,40 +700,51 @@ export class AsesoresService {
           [relacionId],
         );
 
-        const existing = await client.query(
-          `SELECT *
-           FROM "AT".asesores_tesis
-           WHERE asesor_id = $1
-             AND tesis_id = $2
-           ORDER BY activo DESC, creado_en DESC
-           LIMIT 1`,
-          [user.usuario_id, tesis.id],
+        // La tesis es opcional: el estudiante puede vincularse a un asesor antes
+        // de tener una tesis registrada. Si la tiene, además la asociamos.
+        const tesisResult = await client.query(
+          this.buildTesisActivaSql('WHERE t.estudiante_id = $1'),
+          [relacion.estudiante_id],
         );
+        const tesis = tesisResult.rows[0];
 
-        if (existing.rows[0]) {
-          await client.query(
-            `UPDATE "AT".asesores_tesis
-             SET activo = true,
-                 rol = COALESCE(rol, 'principal'),
-                 relacion_id = $3
-             WHERE id = $1 AND asesor_id = $2`,
-            [existing.rows[0].id, user.usuario_id, relacionId],
+        if (tesis) {
+          const existing = await client.query(
+            `SELECT *
+             FROM "AT".asesores_tesis
+             WHERE asesor_id = $1
+               AND tesis_id = $2
+             ORDER BY activo DESC, creado_en DESC
+             LIMIT 1`,
+            [user.usuario_id, tesis.id],
           );
-        } else {
-          await client.query(
-            `INSERT INTO "AT".asesores_tesis
-               (asesor_id, tesis_id, activo, rol, relacion_id)
-             VALUES ($1, $2, true, 'principal', $3)`,
-            [user.usuario_id, tesis.id, relacionId],
-          );
+
+          if (existing.rows[0]) {
+            await client.query(
+              `UPDATE "AT".asesores_tesis
+               SET activo = true,
+                   rol = COALESCE(rol, 'principal'),
+                   relacion_id = $3
+               WHERE id = $1 AND asesor_id = $2`,
+              [existing.rows[0].id, user.usuario_id, relacionId],
+            );
+          } else {
+            await client.query(
+              `INSERT INTO "AT".asesores_tesis
+                 (asesor_id, tesis_id, activo, rol, relacion_id)
+               VALUES ($1, $2, true, 'principal', $3)`,
+              [user.usuario_id, tesis.id, relacionId],
+            );
+          }
         }
 
         await this.notificationsService.create(
           {
             userId: relacion.estudiante_id,
             title: 'Solicitud aceptada',
-            description:
-              'Tu asesor aceptó la conexión y ya está vinculado a tu tesis.',
+            description: tesis
+              ? 'Tu asesor aceptó la conexión y ya está vinculado a tu tesis.'
+              : 'Tu asesor aceptó la conexión. Cuando registres tu tesis quedará vinculada automáticamente.',
             type: 'estudiante_aceptado',
             relatedId: relacionId,
             path: '/student/asesorias',
@@ -763,7 +762,7 @@ export class AsesoresService {
 
     return {
       ok: true,
-      message: 'Estudiante aceptado y vinculado a la tesis correctamente',
+      message: 'Estudiante aceptado y vinculado correctamente',
       data: detail,
     };
   }
@@ -887,7 +886,15 @@ export class AsesoresService {
               reunion.inicio AS reunion_inicio,
               reunion.inicio AS r_reunion_inicio,
               reunion.estado AS reunion_estado,
-              reunion.estado AS r_reunion_estado
+              reunion.estado AS r_reunion_estado,
+              prox_reunion.inicio AS prox_reunion_inicio,
+              prox_reunion.inicio AS r_prox_reunion_inicio,
+              prox_reunion.estado AS r_prox_reunion_estado,
+              avance.avance_pct AS avance_pct,
+              avance.avance_pct AS r_avance_pct,
+              avance.avance_fuente AS r_avance_fuente,
+              avance.modulos_completados AS r_modulos_completados,
+              avance.modulos_total AS r_modulos_total
             FROM "AT".relaciones_asesor_estudiante r
             JOIN "AT".usuarios u ON u.id = r.estudiante_id
             LEFT JOIN "AT".auth_usuarios au ON au.id = u.auth_usuario_id
@@ -914,6 +921,50 @@ export class AsesoresService {
               ORDER BY inicio DESC
               LIMIT 1
             ) reunion ON true
+            LEFT JOIN LATERAL (
+              SELECT inicio, estado
+              FROM "AT".reuniones_asesor
+              WHERE asesor_id = r.asesor_id
+                AND estudiante_id = r.estudiante_id
+                AND estado <> 'cancelado'
+                AND inicio >= now()
+              ORDER BY inicio ASC
+              LIMIT 1
+            ) prox_reunion ON true
+            LEFT JOIN LATERAL (
+              SELECT
+                CASE
+                  WHEN mt.total > 0 THEN mt.avg_prog
+                  WHEN sec.total > 0 THEN round(100.0 * sec.con_contenido / sec.total)
+                  ELSE NULL
+                END::int AS avance_pct,
+                CASE
+                  WHEN mt.total > 0 THEN 'modulos'
+                  WHEN sec.total > 0 THEN 'contenido'
+                  ELSE NULL
+                END AS avance_fuente,
+                mt.completados AS modulos_completados,
+                mt.total AS modulos_total
+              FROM (
+                SELECT
+                  count(*) AS total,
+                  count(*) FILTER (WHERE estado = 'completado') AS completados,
+                  COALESCE(round(avg(progreso)), 0) AS avg_prog
+                FROM "AT".modulos_tesis
+                WHERE tesis_id = tesis.id
+              ) mt
+              CROSS JOIN (
+                SELECT
+                  count(*) AS total,
+                  count(*) FILTER (
+                    WHERE length(btrim(coalesce(content, ''))) > 40
+                  ) AS con_contenido
+                FROM "AT".tesis_sections
+                WHERE tesis_id = tesis.id
+                  AND deleted_at IS NULL
+                  AND level = 1
+              ) sec
+            ) avance ON true
             WHERE r.asesor_id = $1
             ${extraWhere}
             ORDER BY r.creado_en DESC`;
