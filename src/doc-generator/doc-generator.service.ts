@@ -392,6 +392,40 @@ export class DocGeneratorService {
     });
   }
 
+  async bibliography(tesisId: string, path: string, user: CurrentUser, method: string, body?: Record<string, unknown>, documentId?: string) {
+    await this.ensureThesisAccess(tesisId, user);
+    if (!/^(workspace|referencias(?:\/[0-9a-f-]+)?|preview|resolver-doi|estilo|exportaciones|plantilla|(?:operaciones|importaciones)\/[0-9a-f-]+(?:\/archivo)?|documentos\/[0-9a-f-]+\/(?:extraer|sincronizar))$/.test(path)) throw new NotFoundException();
+    if (method !== 'GET' && !['preview', 'resolver-doi'].includes(path)) await this.ensureBibliographyWrite(tesisId, user);
+    const doc = documentId || (typeof body?.document_id === 'string' ? body.document_id : undefined);
+    if (doc && (!/^[0-9a-f-]{36}$/i.test(doc) || await this.getDocumentThesisId(doc) !== tesisId)) throw new NotFoundException('Documento no encontrado');
+    const url = `/theses/${tesisId}/bibliography/${path}${path === 'workspace' && doc ? `?document_id=${encodeURIComponent(doc)}` : ''}`;
+    if (path === 'plantilla' || path.endsWith('/archivo')) return this.bibliographyResponse(await fetch(`${this.baseUrl}${url}`));
+    return this.request(url, { method, body });
+  }
+
+  async bibliographyUpload(tesisId: string, file: Express.Multer.File, user: CurrentUser) {
+    await this.ensureBibliographyWrite(tesisId, user);
+    if (!file || !file.originalname.toLowerCase().endsWith('.docx')) throw new HttpException('Se requiere un archivo DOCX', 415);
+    const body = new FormData();
+    body.append('file', new Blob([new Uint8Array(file.buffer)], { type: DOCX_MIME }), file.originalname);
+    let response: Response;
+    try { response = await fetch(`${this.baseUrl}/theses/${tesisId}/bibliography/importaciones`, { method: 'POST', body }); }
+    catch { throw new HttpException('Servicio de procesamiento no disponible', 503); }
+    const data = await this.parseResponse(response);
+    if (!response.ok) throw new HttpException(data, response.status);
+    return data;
+  }
+
+  private async bibliographyResponse(response: Response) {
+    if (!response.ok || !response.body) throw new HttpException(await this.parseResponse(response), response.status);
+    return new StreamableFile(Readable.fromWeb(response.body as unknown as NodeReadableStream<Uint8Array>), { type: DOCX_MIME, disposition: 'attachment; filename="bibliografia.docx"' });
+  }
+
+  private async ensureBibliographyWrite(tesisId: string, user: CurrentUser) {
+    const result = await this.databaseService.query('SELECT id FROM "AT".tesis WHERE id=$1 AND eliminado_en IS NULL AND (estudiante_id=$2 OR $3=\'admin\')', [tesisId, user.usuario_id, user.rol]);
+    if (!result.rows[0]) throw new NotFoundException('Tesis no encontrada');
+  }
+
   private async request(path: string, init: JsonRequestInit = {}) {
     let response: Response;
     try {

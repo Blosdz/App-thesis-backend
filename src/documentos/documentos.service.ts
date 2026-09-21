@@ -437,22 +437,9 @@ export class DocumentosService {
       return {
         ok: true,
         ...payload,
-        reference_extraction: {
-          ok: true,
-          document_id: documentId,
-          tesis_id: tesisId ?? null,
-          extracted_count: references.length,
-          created_count: references.length,
-          skipped_count: 0,
-          references: references.map((reference: Record<string, unknown>) => ({
-            id: reference.id ?? null,
-            title: String(reference.title || ''),
-            year: reference.year ?? null,
-            type: String(reference.type || 'reference'),
-            source: String(reference.source || 'text'),
-            status: 'created',
-          })),
-        },
+        reference_extraction: payload?.bibliography_operation
+          ? { ok: true, queued: true, ...payload.bibliography_operation }
+          : { ok: false, error: 'Este archivo no admite procesamiento bibliográfico DOCX' },
         outline_extraction: {
           ok: true,
           document_id: documentId,
