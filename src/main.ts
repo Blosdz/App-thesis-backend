@@ -17,8 +17,7 @@ async function bootstrap() {
     origin: (origin, callback) => {
       if (
         !origin ||
-        allowedOrigins.includes(origin) ||
-        /\.trycloudflare\.com$/.test(new URL(origin).hostname)
+        allowedOrigins.includes(origin)
       ) {
         callback(null, true);
         return;

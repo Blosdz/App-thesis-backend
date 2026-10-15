@@ -77,6 +77,20 @@ export class EmailService {
     });
   }
 
+  sendPasswordResetEmail(input: { to: string; resetUrl: string }) {
+    return this.sendEmail({
+      to: input.to,
+      subject: 'Restablece tu contraseña de AppTesis',
+      text: `Restablece tu contraseña ingresando a: ${input.resetUrl}`,
+      html: `
+        <p>Hola,</p>
+        <p>Recibimos una solicitud para restablecer tu contraseña de AppTesis.</p>
+        <p><a href="${input.resetUrl}">Restablecer contraseña</a></p>
+        <p>Si no hiciste esta solicitud, puedes ignorar este mensaje.</p>
+      `,
+    });
+  }
+
   sendPaymentSuccessEmail(input: {
     to: string | string[];
     concepto?: string | null;

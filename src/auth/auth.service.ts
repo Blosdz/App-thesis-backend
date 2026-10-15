@@ -174,14 +174,36 @@ export class AuthService {
          VALUES ($1, $2, now() + interval '1 hour')`,
         [userResult.rows[0].id, tokenHash],
       );
+
+      const frontendUrl = this.getFrontendBaseUrl();
+      const resetUrl = `${frontendUrl}/#/reset-password?token=${token}`;
+      const emailResult = await this.emailService.sendPasswordResetEmail({
+        to: userResult.rows[0].email,
+        resetUrl,
+      });
+
+      if (!emailResult.ok) {
+        this.logger.warn(
+          `No se pudo enviar el correo de recuperación. Email=${userResult.rows[0].email}`,
+        );
+      }
     }
 
-    return {
+    const response: {
+      ok: true;
+      message: string;
+      token?: string;
+    } = {
       ok: true,
       message:
         'Si el correo está registrado, se generó una solicitud de recuperación.',
-      token: userResult.rows[0] ? token : null,
     };
+
+    if (process.env.NODE_ENV !== 'production' && userResult.rows[0]) {
+      response.token = token;
+    }
+
+    return response;
   }
 
   async resetPassword(dto: PasswordResetDto) {

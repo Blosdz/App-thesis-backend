@@ -1,9 +1,17 @@
 -- Admin local para desarrollo.
--- Email: admin@tesis.local
--- Password: Admin123!
+-- Antes de ejecutar, configure una clave no publicada en esta sesion:
+-- SET app.admin_seed_password = '<clave-segura>';
 
 CREATE SCHEMA IF NOT EXISTS "AT";
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+DO $$
+BEGIN
+  IF current_setting('app.admin_seed_password', true) IS NULL THEN
+    RAISE EXCEPTION 'Debe configurar app.admin_seed_password antes de ejecutar esta semilla';
+  END IF;
+END
+$$;
 
 WITH upsert_auth AS (
   INSERT INTO "AT".auth_usuarios (
@@ -16,7 +24,7 @@ WITH upsert_auth AS (
   )
   VALUES (
     'admin@tesis.local',
-    crypt('Admin123!', gen_salt('bf', 12)),
+    crypt(current_setting('app.admin_seed_password'), gen_salt('bf', 12)),
     true,
     true,
     now(),

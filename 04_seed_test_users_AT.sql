@@ -1,4 +1,14 @@
 -- Solo desarrollo local. Ambas cuentas usan la clave app_theseis.
+-- Habilite la semilla de forma explicita en una sesion local:
+-- SET app.allow_test_seed = 'true';
+
+DO $$
+BEGIN
+  IF current_setting('app.allow_test_seed', true) IS DISTINCT FROM 'true' THEN
+    RAISE EXCEPTION 'La semilla de usuarios de prueba esta deshabilitada';
+  END IF;
+END
+$$;
 -- Reejecutar conserva los IDs y restablece la clave de estas dos cuentas.
 BEGIN;
 
